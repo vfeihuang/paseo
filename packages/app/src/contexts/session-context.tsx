@@ -1204,7 +1204,10 @@ function SessionProviderInternal({ children, serverId, client }: SessionProvider
     };
   }, []);
 
-  useEffect(() => mountBrowserAutomationDaemonClientHandler(client), [client]);
+  useEffect(
+    () => mountBrowserAutomationDaemonClientHandler(client, { serverId }),
+    [client, serverId],
+  );
 
   // Daemon message handlers - directly update Zustand store
   useEffect(() => {
