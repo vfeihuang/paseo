@@ -116,6 +116,7 @@ export interface AgentMcpServerOptions {
   enableVoiceTools?: boolean;
   voiceOnly?: boolean;
   browserToolsBroker?: BrowserToolsBroker | null;
+  browserToolsEnabled?: boolean;
   logger: Logger;
 }
 
@@ -878,7 +879,7 @@ export async function createAgentMcpServer(options: AgentMcpServerOptions): Prom
     return server;
   }
 
-  if (options.browserToolsBroker) {
+  if (options.browserToolsBroker && options.browserToolsEnabled === true) {
     registerBrowserTools({
       registerTool,
       broker: options.browserToolsBroker,

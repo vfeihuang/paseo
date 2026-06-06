@@ -318,8 +318,9 @@ export async function createPaseoDaemon(
     },
     logger,
   );
+  const browserToolsPolicy = new DaemonConfigBrowserToolsPolicy(daemonConfigStore);
   const browserToolsBroker = new BrowserToolsBroker({
-    policy: new DaemonConfigBrowserToolsPolicy(daemonConfigStore),
+    policy: browserToolsPolicy,
   });
 
   const serverId = getOrCreateServerId(config.paseoHome, { logger });
@@ -764,6 +765,7 @@ export async function createPaseoDaemon(
         worktreesRoot: config.worktreesRoot,
         callerAgentId,
         browserToolsBroker,
+        browserToolsEnabled: browserToolsPolicy.isEnabled(),
         enableVoiceTools: false,
         resolveSpeakHandler: (agentId) => wsServer?.resolveVoiceSpeakHandler(agentId) ?? null,
         resolveCallerContext: (agentId) => wsServer?.resolveVoiceCallerContext(agentId) ?? null,
