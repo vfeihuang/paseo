@@ -8,14 +8,16 @@ import {
   View,
   type PressableStateCallbackType,
 } from "react-native";
+import { router } from "expo-router";
 import { Server } from "lucide-react-native";
 import { create } from "zustand";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
-import { HostStatusDot } from "@/components/host-status-dot";
+import { HostStatusDotSlot } from "@/components/hosts/host-picker";
 import { isNative } from "@/constants/platform";
 import { useLocalDaemonServerId } from "@/hooks/use-is-local-daemon";
 import { useHosts } from "@/runtime/host-runtime";
 import { orderHostsLocalFirst, type HostProfile } from "@/types/host-connection";
+import { buildSettingsAddHostRoute } from "@/utils/host-routes";
 
 type HostFilter = (host: HostProfile) => boolean;
 type HostChoiceHandler = (serverId: string) => void | Promise<void>;
@@ -71,7 +73,7 @@ export function useHostChooser() {
       );
 
       if (availableHosts.length === 0) {
-        input.onNoHosts?.();
+        (input.onNoHosts ?? (() => router.push(buildSettingsAddHostRoute(Date.now()))))();
         return false;
       }
 
@@ -118,7 +120,7 @@ function HostChooserRow({
       testID={`host-chooser-row-${host.serverId}`}
     >
       <View style={styles.rowIconSlot}>
-        <HostStatusDot serverId={host.serverId} />
+        <HostStatusDotSlot serverId={host.serverId} />
       </View>
       <View style={styles.rowText}>
         <Text style={styles.rowTitle} numberOfLines={1}>

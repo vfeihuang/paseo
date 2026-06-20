@@ -153,7 +153,7 @@ function WorkspaceTitlePrefix({
   );
 }
 
-function SessionTitleBadges({
+function SessionRowBadges({
   agent,
   archivedIcon,
   pendingPermissionCount,
@@ -165,7 +165,6 @@ function SessionTitleBadges({
   showDesktopAttention: boolean;
 }) {
   const { t } = useTranslation();
-
   return (
     <>
       {agent.archivedAt ? (
@@ -184,97 +183,22 @@ function SessionTitleBadges({
   );
 }
 
-function MobileSessionMetaRow({
-  agent,
-  projectName,
-  branch,
-  workspaceName,
-  timeAgo,
-  showHostColumn,
+function SessionRowTrailingAttention({
+  isMobile,
+  showAttentionIndicator,
+  requiresAttention,
 }: {
-  agent: AggregatedAgent;
-  projectName: string;
-  branch: string;
-  workspaceName: string;
-  timeAgo: string;
-  showHostColumn: boolean;
+  isMobile: boolean;
+  showAttentionIndicator: boolean;
+  requiresAttention: boolean | undefined;
 }) {
+  const { t } = useTranslation();
+  if (!isMobile || !showAttentionIndicator || !requiresAttention) {
+    return null;
+  }
   return (
-    <View style={styles.rowMetaRow}>
-      <Text
-        style={styles.sessionMetaText}
-        numberOfLines={1}
-        testID={`agent-row-project-${agent.serverId}-${agent.id}`}
-      >
-        {projectName}
-      </Text>
-      <Text style={styles.sessionMetaSeparator}>·</Text>
-      <Text
-        style={styles.sessionMetaText}
-        numberOfLines={1}
-        testID={`agent-row-branch-${agent.serverId}-${agent.id}`}
-      >
-        {branch}
-      </Text>
-      <Text style={styles.sessionMetaSeparator}>·</Text>
-      <Text
-        style={styles.sessionMetaText}
-        numberOfLines={1}
-        testID={`agent-row-workspace-${agent.serverId}-${agent.id}`}
-      >
-        {workspaceName}
-      </Text>
-      <Text style={styles.sessionMetaSeparator}>·</Text>
-      <Text style={styles.sessionMetaText}>{timeAgo}</Text>
-      {showHostColumn && agent.serverLabel ? (
-        <>
-          <Text style={styles.sessionMetaSeparator}>·</Text>
-          <Text style={styles.sessionMetaText} numberOfLines={1}>
-            {agent.serverLabel}
-          </Text>
-        </>
-      ) : null}
-    </View>
-  );
-}
-
-function DesktopSessionColumns({
-  agent,
-  projectName,
-  branch,
-  timeAgo,
-  showHostColumn,
-}: {
-  agent: AggregatedAgent;
-  projectName: string;
-  branch: string;
-  timeAgo: string;
-  showHostColumn: boolean;
-}) {
-  return (
-    <View style={styles.rowColumns}>
-      <Text
-        style={styles.columnMeta}
-        numberOfLines={1}
-        testID={`agent-row-project-${agent.serverId}-${agent.id}`}
-      >
-        {projectName}
-      </Text>
-      {showHostColumn ? (
-        <Text style={styles.columnMetaHost} numberOfLines={1}>
-          {agent.serverLabel}
-        </Text>
-      ) : null}
-      <Text
-        style={styles.columnMeta}
-        numberOfLines={1}
-        testID={`agent-row-branch-${agent.serverId}-${agent.id}`}
-      >
-        {branch}
-      </Text>
-      <Text style={styles.columnMetaFixed} numberOfLines={1}>
-        {timeAgo}
-      </Text>
+    <View style={styles.rowTrailing}>
+      <SessionBadge label={t("agentList.badges.attention")} tone="danger" />
     </View>
   );
 }
@@ -354,7 +278,7 @@ function SessionRow({
           <Text style={sessionTitleStyle} numberOfLines={1}>
             {agent.title || t("agentList.fallbackTitle")}
           </Text>
-          <SessionTitleBadges
+          <SessionRowBadges
             agent={agent}
             archivedIcon={archivedIcon}
             pendingPermissionCount={pendingPermissionCount}
@@ -362,30 +286,74 @@ function SessionRow({
           />
         </View>
         {isMobile ? (
-          <MobileSessionMetaRow
-            agent={agent}
-            projectName={projectName}
-            branch={branch}
-            workspaceName={workspaceName}
-            timeAgo={timeAgo}
-            showHostColumn={showHostColumn}
-          />
+          <View style={styles.rowMetaRow}>
+            <Text
+              style={styles.sessionMetaText}
+              numberOfLines={1}
+              testID={`agent-row-project-${agent.serverId}-${agent.id}`}
+            >
+              {projectName}
+            </Text>
+            <Text style={styles.sessionMetaSeparator}>·</Text>
+            <Text
+              style={styles.sessionMetaText}
+              numberOfLines={1}
+              testID={`agent-row-branch-${agent.serverId}-${agent.id}`}
+            >
+              {branch}
+            </Text>
+            <Text style={styles.sessionMetaSeparator}>·</Text>
+            <Text
+              style={styles.sessionMetaText}
+              numberOfLines={1}
+              testID={`agent-row-workspace-${agent.serverId}-${agent.id}`}
+            >
+              {workspaceName}
+            </Text>
+            <Text style={styles.sessionMetaSeparator}>·</Text>
+            <Text style={styles.sessionMetaText}>{timeAgo}</Text>
+            {showHostColumn && agent.serverLabel ? (
+              <>
+                <Text style={styles.sessionMetaSeparator}>·</Text>
+                <Text style={styles.sessionMetaText} numberOfLines={1}>
+                  {agent.serverLabel}
+                </Text>
+              </>
+            ) : null}
+          </View>
         ) : null}
       </View>
       {!isMobile ? (
-        <DesktopSessionColumns
-          agent={agent}
-          projectName={projectName}
-          branch={branch}
-          timeAgo={timeAgo}
-          showHostColumn={showHostColumn}
-        />
-      ) : null}
-      {isMobile && showAttentionIndicator && agent.requiresAttention ? (
-        <View style={styles.rowTrailing}>
-          <SessionBadge label={t("agentList.badges.attention")} tone="danger" />
+        <View style={styles.rowColumns}>
+          <Text
+            style={styles.columnMeta}
+            numberOfLines={1}
+            testID={`agent-row-project-${agent.serverId}-${agent.id}`}
+          >
+            {projectName}
+          </Text>
+          {showHostColumn ? (
+            <Text style={styles.columnMetaHost} numberOfLines={1}>
+              {agent.serverLabel}
+            </Text>
+          ) : null}
+          <Text
+            style={styles.columnMeta}
+            numberOfLines={1}
+            testID={`agent-row-branch-${agent.serverId}-${agent.id}`}
+          >
+            {branch}
+          </Text>
+          <Text style={styles.columnMetaFixed} numberOfLines={1}>
+            {timeAgo}
+          </Text>
         </View>
       ) : null}
+      <SessionRowTrailingAttention
+        isMobile={isMobile}
+        showAttentionIndicator={showAttentionIndicator}
+        requiresAttention={agent.requiresAttention}
+      />
     </Pressable>
   );
 }

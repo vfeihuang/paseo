@@ -11,7 +11,6 @@ import {
 
 export function WorkspaceShortcutTargetsSubscriber({ enabled }: { enabled: boolean }) {
   const { workspacePlacements, projects, projectNamesByKey } = useSidebarWorkspacesList({
-    hostFilter: null,
     enabled,
   });
   const groupMode = useSidebarViewStore((state) => state.groupMode);

@@ -44,10 +44,10 @@ function workspaceDescriptor(input: {
   };
 }
 
-function hostProfile(): HostProfile {
+function hostProfile(serverId = "srv"): HostProfile {
   const now = "2026-04-19T00:00:00.000Z";
   return {
-    serverId: "srv",
+    serverId,
     label: "Shortcut Host",
     lifecycle: {},
     connections: [],
@@ -86,6 +86,7 @@ describe("WorkspaceShortcutTargetsSubscriber", () => {
     });
     useSidebarViewStore.setState({
       groupMode: "project",
+      hostFilter: null,
     });
 
     act(() => {
@@ -114,6 +115,8 @@ describe("WorkspaceShortcutTargetsSubscriber", () => {
     act(() => {
       setHostProfiles([]);
       useSessionStore.getState().clearSession("srv");
+      useSessionStore.getState().clearSession("host-a");
+      useSessionStore.getState().clearSession("host-b");
     });
   });
 
@@ -191,6 +194,45 @@ describe("WorkspaceShortcutTargetsSubscriber", () => {
       { serverId: "srv", workspaceId: "ws-running-new" },
       { serverId: "srv", workspaceId: "ws-running-old" },
       { serverId: "srv", workspaceId: "ws-done" },
+    ]);
+  });
+
+  it("publishes shortcut targets from the visible host filter in project and status modes", async () => {
+    act(() => {
+      setHostProfiles([hostProfile("host-a"), hostProfile("host-b")]);
+      useSessionStore.getState().initializeSession("host-a", null as unknown as DaemonClient);
+      useSessionStore.getState().initializeSession("host-b", null as unknown as DaemonClient);
+      useSessionStore
+        .getState()
+        .setWorkspaces(
+          "host-a",
+          new Map([["a-1", workspaceDescriptor({ id: "a-1", name: "Host A" })]]),
+        );
+      useSessionStore
+        .getState()
+        .setWorkspaces(
+          "host-b",
+          new Map([["b-1", workspaceDescriptor({ id: "b-1", name: "Host B" })]]),
+        );
+      useSessionStore.getState().setHasHydratedWorkspaces("host-a", true);
+      useSessionStore.getState().setHasHydratedWorkspaces("host-b", true);
+      useSidebarViewStore.getState().setHostFilter("host-b");
+    });
+
+    await act(async () => {
+      root?.render(<WorkspaceShortcutTargetsSubscriber enabled={true} />);
+    });
+
+    expect(useKeyboardShortcutsStore.getState().sidebarShortcutWorkspaceTargets).toEqual([
+      { serverId: "host-b", workspaceId: "b-1" },
+    ]);
+
+    await act(async () => {
+      useSidebarViewStore.getState().setGroupMode("status");
+    });
+
+    expect(useKeyboardShortcutsStore.getState().sidebarShortcutWorkspaceTargets).toEqual([
+      { serverId: "host-b", workspaceId: "b-1" },
     ]);
   });
 

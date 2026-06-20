@@ -96,7 +96,8 @@ export function useSidebarWorkspacesList(options?: {
   const hostRegistryLoaded = useHostRegistryLoaded();
   const allServerIds = useMemo(() => allHosts.map((h) => h.serverId), [allHosts]);
 
-  const hostFilter = options?.hostFilter ?? null;
+  const storeHostFilter = useSidebarViewStore((state) => state.hostFilter);
+  const hostFilter = options?.hostFilter ?? storeHostFilter;
   const reconcileHostFilter = useSidebarViewStore((state) => state.reconcileHostFilter);
   const hasHostFilterMatch = hostFilter ? allServerIds.includes(hostFilter) : false;
   const effectiveHostFilter =

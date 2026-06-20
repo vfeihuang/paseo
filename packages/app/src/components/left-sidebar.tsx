@@ -8,7 +8,6 @@ import {
   Text,
   useWindowDimensions,
   View,
-  type GestureResponderEvent,
   type PressableStateCallbackType,
 } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
@@ -22,19 +21,13 @@ import Animated, {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import { TitlebarDragRegion } from "@/components/desktop/titlebar-drag-region";
-import {
-  ADD_HOST_OPTION_ID,
-  AddHostPickerOption,
-  HostPickerOption,
-} from "@/components/hosts/host-picker-options";
+import { HostPicker } from "@/components/hosts/host-picker";
 import { SidebarHeaderRow } from "@/components/sidebar/sidebar-header-row";
 import { SidebarGroupingSelector } from "@/components/sidebar/sidebar-grouping-selector";
-import { Combobox, type ComboboxOption } from "@/components/ui/combobox";
 import { Shortcut } from "@/components/ui/shortcut";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { isWeb } from "@/constants/platform";
-import { useLocalDaemonServerId } from "@/hooks/use-is-local-daemon";
 import { useSidebarAnimation } from "@/contexts/sidebar-animation-context";
 import { useOpenProjectPicker } from "@/hooks/use-open-project-picker";
 import { useHostChooser } from "@/hosts/host-chooser";
@@ -49,7 +42,6 @@ import { useStatusModeWorkspacePlacements } from "@/hooks/use-status-mode-worksp
 import { useSidebarViewStore, type SidebarGroupMode } from "@/stores/sidebar-view-store";
 import { useKeyboardShortcutsStore } from "@/stores/keyboard-shortcuts-store";
 import { useHosts } from "@/runtime/host-runtime";
-import { orderHostsLocalFirst } from "@/types/host-connection";
 import {
   MAX_SIDEBAR_WIDTH,
   MIN_SIDEBAR_WIDTH,
@@ -82,7 +74,6 @@ interface LeftSidebarProps {
 
 interface SidebarSharedProps {
   theme: SidebarTheme;
-  hostFilter: string | null;
   statusWorkspacePlacements: SidebarStatusWorkspacePlacement[];
   projects: SidebarProjectEntry[];
   projectNamesByKey: Map<string, string>;
@@ -142,7 +133,6 @@ export const LeftSidebar = memo(function LeftSidebar({
     selectIsAgentListOpen(state, { isCompact: isCompactLayout }),
   );
   const showMobileAgent = usePanelStore((state) => state.showMobileAgent);
-  const hostFilter = useSidebarViewStore((state) => state.hostFilter);
 
   const {
     workspacePlacements,
@@ -152,7 +142,6 @@ export const LeftSidebar = memo(function LeftSidebar({
     isRevalidating,
     refreshAll,
   } = useSidebarWorkspacesList({
-    hostFilter,
     enabled: isCompactLayout || isOpen,
   });
   const statusWorkspacePlacements = useStatusModeWorkspacePlacements({
@@ -178,9 +167,6 @@ export const LeftSidebar = memo(function LeftSidebar({
 
   const openProjectPicker = useOpenProjectPicker();
   const chooseHost = useHostChooser();
-  const handleNoHosts = useCallback(() => {
-    router.push(buildSettingsAddHostRoute(Date.now()));
-  }, []);
 
   const handleOpenProjectMobile = useCallback(() => {
     showMobileAgent();
@@ -194,12 +180,11 @@ export const LeftSidebar = memo(function LeftSidebar({
   const handleNewWorkspaceNavigate = useCallback(() => {
     chooseHost({
       title: "Choose host",
-      onNoHosts: handleNoHosts,
       onChooseHost: (serverId) => {
         router.push(buildHostNewWorkspaceRoute(serverId));
       },
     });
-  }, [chooseHost, handleNoHosts]);
+  }, [chooseHost]);
 
   const handleSettingsMobile = useCallback(() => {
     showMobileAgent();
@@ -261,7 +246,6 @@ export const LeftSidebar = memo(function LeftSidebar({
 
   const sharedProps = {
     theme,
-    hostFilter,
     statusWorkspacePlacements,
     projects,
     projectNamesByKey,
@@ -312,14 +296,22 @@ export const LeftSidebar = memo(function LeftSidebar({
   );
 });
 
+function sidebarHostOptionTestID(serverId: string): string {
+  return `sidebar-host-row-${serverId}`;
+}
+
+function sidebarHostLocalMarkerTestID(serverId: string): string {
+  return `sidebar-host-local-marker-${serverId}`;
+}
+
 function FooterIconButton({
+  buttonRef,
   onPress,
   testID,
   accessibilityLabel,
   icon: Icon,
   iconSize,
   theme,
-  buttonRef,
 }: {
   onPress: () => void;
   testID: string;
@@ -351,75 +343,6 @@ function FooterIconButton({
   );
 }
 
-function HostSettingsAction({
-  serverId,
-  label,
-  onPress,
-}: {
-  serverId: string;
-  label: string;
-  onPress: (serverId: string) => void;
-}) {
-  const { theme } = useUnistyles();
-  const handlePress = useCallback(
-    (event: GestureResponderEvent) => {
-      event.stopPropagation();
-      onPress(serverId);
-    },
-    [onPress, serverId],
-  );
-
-  return (
-    <Pressable
-      onPress={handlePress}
-      hitSlop={8}
-      accessibilityRole="button"
-      accessibilityLabel={`Open ${label} settings`}
-      testID={`sidebar-host-settings-${serverId}`}
-    >
-      <Settings size={theme.iconSize.sm} color={theme.colors.foregroundMuted} />
-    </Pressable>
-  );
-}
-
-function SidebarHostPickerOption({
-  option,
-  selected,
-  active,
-  localServerId,
-  onPress,
-  onOpenHostSettings,
-}: {
-  option: ComboboxOption;
-  selected: boolean;
-  active: boolean;
-  localServerId: string | null;
-  onPress: () => void;
-  onOpenHostSettings: (serverId: string) => void;
-}) {
-  const trailingAction = useMemo(
-    () => (
-      <HostSettingsAction serverId={option.id} label={option.label} onPress={onOpenHostSettings} />
-    ),
-    [onOpenHostSettings, option.id, option.label],
-  );
-
-  return (
-    <HostPickerOption
-      serverId={option.id}
-      label={option.label}
-      isLocal={localServerId !== null && option.id === localServerId}
-      selected={selected}
-      active={active}
-      interactiveFeedback={false}
-      onPress={onPress}
-      trailingAction={trailingAction}
-      localMarkerTestID={`sidebar-host-local-marker-${option.id}`}
-      testID={`sidebar-host-row-${option.id}`}
-    />
-  );
-}
-
 function SidebarHostPicker({
   theme,
   onAddHost,
@@ -430,78 +353,36 @@ function SidebarHostPicker({
   onOpenHostSettings: (serverId: string) => void;
 }) {
   const hosts = useHosts();
-  const localServerId = useLocalDaemonServerId();
-  const sortedHosts = useMemo(
-    () => orderHostsLocalFirst(hosts, localServerId),
-    [hosts, localServerId],
-  );
   const triggerRef = useRef<View | null>(null);
   const [isOpen, setIsOpen] = useState(false);
 
-  const options = useMemo<ComboboxOption[]>(() => {
-    const hostOptions = sortedHosts.map((host) => ({ id: host.serverId, label: host.label }));
-    return [...hostOptions, { id: ADD_HOST_OPTION_ID, label: "Add host" }];
-  }, [sortedHosts]);
-
-  const handleOpen = useCallback(() => setIsOpen(true), []);
   const handleSelect = useCallback(
     (id: string) => {
-      setIsOpen(false);
-      if (id === ADD_HOST_OPTION_ID) {
-        onAddHost();
-        return;
-      }
       onOpenHostSettings(id);
-    },
-    [onAddHost, onOpenHostSettings],
-  );
-
-  const handleOpenHostSettings = useCallback(
-    (serverId: string) => {
-      setIsOpen(false);
-      onOpenHostSettings(serverId);
     },
     [onOpenHostSettings],
   );
 
-  const renderOption = useCallback(
-    ({
-      option,
-      selected,
-      active,
-      onPress,
-    }: {
-      option: ComboboxOption;
-      selected: boolean;
-      active: boolean;
-      onPress: () => void;
-    }) => {
-      if (option.id === ADD_HOST_OPTION_ID) {
-        return (
-          <AddHostPickerOption
-            active={active}
-            interactiveFeedback={false}
-            onPress={onPress}
-            testID="sidebar-host-add"
-          />
-        );
-      }
-      return (
-        <SidebarHostPickerOption
-          option={option}
-          selected={selected}
-          active={active}
-          localServerId={localServerId}
-          onPress={onPress}
-          onOpenHostSettings={handleOpenHostSettings}
-        />
-      );
-    },
-    [handleOpenHostSettings, localServerId],
-  );
+  const handleOpen = useCallback(() => setIsOpen(true), []);
 
   return (
-    <>
+    <HostPicker
+      hosts={hosts}
+      value=""
+      onSelect={handleSelect}
+      open={isOpen}
+      onOpenChange={setIsOpen}
+      anchorRef={triggerRef}
+      includeAddHost
+      onAddHost={onAddHost}
+      showLocalMarker
+      onOpenHostSettings={onOpenHostSettings}
+      searchable
+      desktopMinWidth={240}
+      addHostTestID="sidebar-host-add"
+      hostOptionTestID={sidebarHostOptionTestID}
+      hostLocalMarkerTestID={sidebarHostLocalMarkerTestID}
+    >
       <FooterIconButton
         buttonRef={triggerRef}
         onPress={handleOpen}
@@ -511,21 +392,7 @@ function SidebarHostPicker({
         iconSize={theme.iconSize.sm}
         theme={theme}
       />
-      <Combobox
-        options={options}
-        value=""
-        onSelect={handleSelect}
-        renderOption={renderOption}
-        searchable={sortedHosts.length > 10}
-        searchPlaceholder="Search hosts"
-        title="Host"
-        desktopPlacement="top-start"
-        desktopMinWidth={240}
-        open={isOpen}
-        onOpenChange={setIsOpen}
-        anchorRef={triggerRef}
-      />
-    </>
+    </HostPicker>
   );
 }
 

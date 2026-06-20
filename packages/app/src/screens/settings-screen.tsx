@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ComponentType, ReactElement, ReactNode } from "react";
+import type { ComponentType, ReactNode } from "react";
 import {
   Alert,
   Pressable,
@@ -38,12 +38,7 @@ import { DropdownTrigger } from "@/components/ui/dropdown-trigger";
 import { ComboboxTrigger } from "@/components/ui/combobox-trigger";
 import { SidebarHeaderRow } from "@/components/sidebar/sidebar-header-row";
 import { SidebarSeparator } from "@/components/sidebar/sidebar-separator";
-import {
-  ADD_HOST_OPTION_ID,
-  AddHostPickerOption,
-  HostPickerOption,
-  HostStatusDotSlot,
-} from "@/components/hosts/host-picker-options";
+import { HostPicker as SharedHostPicker, HostStatusDotSlot } from "@/components/hosts/host-picker";
 import { ScreenTitle } from "@/components/headers/screen-title";
 import { HeaderIconBadge } from "@/components/headers/header-icon-badge";
 import { SettingsSection } from "@/screens/settings/settings-section";
@@ -73,7 +68,6 @@ import { Button } from "@/components/ui/button";
 import { CommunityLinks } from "@/components/community-links";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
-import { Combobox, type ComboboxOption } from "@/components/ui/combobox";
 import { DesktopPermissionsSection } from "@/desktop/components/desktop-permissions-section";
 import { IntegrationsSection } from "@/desktop/components/integrations-section";
 import { LocalDaemonSection } from "@/desktop/components/desktop-updates-section";
@@ -870,7 +864,6 @@ function SidebarProjectsButton({ isSelected, onSelect }: SidebarProjectsButtonPr
 interface HostPickerProps {
   activeServerId: string | null;
   sortedHosts: HostProfile[];
-  localServerId: string | null;
   onSelectHost: (serverId: string) => void;
   onAddHost: () => void;
 }
@@ -881,67 +874,19 @@ interface HostPickerProps {
  * <Combobox>. The local host is listed first and tagged "Local"; an "Add host"
  * row is always reachable from the list — even with a single host.
  */
-function HostPicker({
-  activeServerId,
-  sortedHosts,
-  localServerId,
-  onSelectHost,
-  onAddHost,
-}: HostPickerProps) {
+function HostPicker({ activeServerId, sortedHosts, onSelectHost, onAddHost }: HostPickerProps) {
   const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
   const triggerRef = useRef<View | null>(null);
   const activeHost =
     sortedHosts.find((host) => host.serverId === activeServerId) ?? sortedHosts[0] ?? null;
 
-  const options = useMemo<ComboboxOption[]>(() => {
-    const hostOptions = sortedHosts.map((host) => ({ id: host.serverId, label: host.label }));
-    return [...hostOptions, { id: ADD_HOST_OPTION_ID, label: t("settings.addHost") }];
-  }, [sortedHosts, t]);
-
-  const handleSelect = useCallback(
-    (id: string) => {
-      if (id === ADD_HOST_OPTION_ID) {
-        onAddHost();
-        return;
-      }
-      onSelectHost(id);
-    },
-    [onAddHost, onSelectHost],
-  );
-
-  const renderOption = useCallback(
-    ({
-      option,
-      selected,
-      active,
-      onPress,
-    }: {
-      option: ComboboxOption;
-      selected: boolean;
-      active: boolean;
-      onPress: () => void;
-    }): ReactElement => {
-      if (option.id === ADD_HOST_OPTION_ID) {
-        return <AddHostPickerOption active={active} onPress={onPress} testID="settings-add-host" />;
-      }
-      return (
-        <HostPickerOption
-          serverId={option.id}
-          label={option.label}
-          isLocal={localServerId !== null && option.id === localServerId}
-          selected={selected}
-          active={active}
-          onPress={onPress}
-          localMarkerTestID="settings-host-local-marker"
-          testID={`settings-host-picker-item-${option.id}`}
-        />
-      );
-    },
-    [localServerId],
-  );
-
   const handleOpen = useCallback(() => setIsOpen(true), []);
+  const hostLocalMarkerTestID = useCallback(() => "settings-host-local-marker", []);
+  const hostOptionTestID = useCallback(
+    (serverId: string) => `settings-host-picker-item-${serverId}`,
+    [],
+  );
   const triggerStyle = useCallback(
     ({ hovered = false }: PressableStateCallbackType & { hovered?: boolean }) => [
       sidebarStyles.pickerTrigger,
@@ -951,7 +896,23 @@ function HostPicker({
   );
 
   return (
-    <>
+    <SharedHostPicker
+      hosts={sortedHosts}
+      value={activeServerId ?? ""}
+      onSelect={onSelectHost}
+      open={isOpen}
+      onOpenChange={setIsOpen}
+      anchorRef={triggerRef}
+      includeAddHost
+      onAddHost={onAddHost}
+      showLocalMarker
+      searchable={false}
+      title={t("settings.hostPicker.switchHost")}
+      desktopMinWidth={240}
+      addHostTestID="settings-add-host"
+      hostLocalMarkerTestID={hostLocalMarkerTestID}
+      hostOptionTestID={hostOptionTestID}
+    >
       <ComboboxTrigger
         ref={triggerRef}
         style={triggerStyle}
@@ -965,19 +926,7 @@ function HostPicker({
           {activeHost?.label ?? t("settings.groups.host")}
         </Text>
       </ComboboxTrigger>
-      <Combobox
-        options={options}
-        value={activeServerId ?? ""}
-        onSelect={handleSelect}
-        renderOption={renderOption}
-        searchable={false}
-        title={t("settings.hostPicker.switchHost")}
-        desktopMinWidth={240}
-        open={isOpen}
-        onOpenChange={setIsOpen}
-        anchorRef={triggerRef}
-      />
-    </>
+    </SharedHostPicker>
   );
 }
 
@@ -1054,7 +1003,6 @@ function SettingsSidebar({
           <HostPicker
             activeServerId={activeHostServerId}
             sortedHosts={sortedHosts}
-            localServerId={localServerId}
             onSelectHost={onSelectHost}
             onAddHost={onAddHost}
           />

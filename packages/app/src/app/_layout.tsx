@@ -92,7 +92,6 @@ import { toggleDesktopSidebarsWithCheckoutIntent } from "@/utils/desktop-sidebar
 import { canOpenLeftSidebarGesture } from "@/utils/sidebar-animation-state";
 import {
   buildOpenProjectRoute,
-  buildSettingsAddHostRoute,
   parseHostAgentRouteFromPathname,
   parseServerIdFromPathname,
   parseWorkspaceOpenIntent,
@@ -752,7 +751,6 @@ interface PendingOpenProjectRequest {
 let nextOpenProjectRequestId = 1;
 
 function OpenProjectListener() {
-  const router = useRouter();
   const chooseHost = useHostChooser();
   const hostRegistryLoaded = useHostRegistryLoaded();
   const [request, setRequest] = useState<PendingOpenProjectRequest | null>(null);
@@ -773,9 +771,6 @@ function OpenProjectListener() {
 
       chooseHost({
         title: "Choose host",
-        onNoHosts: () => {
-          router.push(buildSettingsAddHostRoute(Date.now()));
-        },
         onChooseHost: (serverId) => {
           setRequest({
             id: nextOpenProjectRequestId++,
@@ -785,7 +780,7 @@ function OpenProjectListener() {
         },
       });
     },
-    [chooseHost, hostRegistryLoaded, router],
+    [chooseHost, hostRegistryLoaded],
   );
 
   useEffect(() => {
@@ -802,10 +797,16 @@ function OpenProjectListener() {
       return;
     }
     let cancelled = false;
-    void openProject(request.path).then((didOpen) => {
-      if (cancelled || !didOpen) {
+    void openProject(request.path).then((result) => {
+      if (cancelled) {
         return null;
       }
+
+      if (!result.ok) {
+        setRequest((current) => (current?.id === request.id ? null : current));
+        return null;
+      }
+
       setRequest((current) => (current?.id === request.id ? null : current));
       return null;
     });

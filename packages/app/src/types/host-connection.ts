@@ -56,10 +56,10 @@ export function normalizeHostLabel(value: string | null | undefined, serverId: s
   return trimmed.length > 0 ? trimmed : serverId;
 }
 
-export function orderHostsLocalFirst(
-  hosts: HostProfile[],
+export function orderHostsLocalFirst<T extends { serverId: string }>(
+  hosts: T[],
   localServerId: string | null,
-): HostProfile[] {
+): T[] {
   if (!localServerId) {
     return hosts;
   }

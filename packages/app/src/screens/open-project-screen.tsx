@@ -19,11 +19,7 @@ import {
 import { TitlebarDragRegion } from "@/components/desktop/titlebar-drag-region";
 import { useLocalDaemonServerId } from "@/hooks/use-is-local-daemon";
 import { PairDeviceModal } from "@/desktop/components/pair-device-modal";
-import {
-  buildHostAgentDetailRoute,
-  buildSettingsAddHostRoute,
-  buildSettingsHostSectionRoute,
-} from "@/utils/host-routes";
+import { buildHostAgentDetailRoute, buildSettingsHostSectionRoute } from "@/utils/host-routes";
 import { ImportSessionSheet } from "@/components/import-session-sheet";
 import { useHostRuntimeClient } from "@/runtime/host-runtime";
 import { useOpenProject } from "@/hooks/use-open-project";
@@ -56,28 +52,26 @@ export function OpenProjectScreen() {
 
   const handleOpenPairDevice = useCallback(() => setIsPairDeviceOpen(true), []);
   const handleClosePairDevice = useCallback(() => setIsPairDeviceOpen(false), []);
-  const handleNoHosts = useCallback(() => {
-    router.push(buildSettingsAddHostRoute(Date.now()));
-  }, [router]);
 
   const handleOpenImportSession = useCallback(() => {
     chooseHost({
       title: "Import from host",
-      onNoHosts: handleNoHosts,
       onChooseHost: (serverId) => {
         setImportServerId(serverId);
         setIsImportSheetOpen(true);
       },
     });
-  }, [chooseHost, handleNoHosts]);
+  }, [chooseHost]);
   const handleCloseImportSession = useCallback(() => setIsImportSheetOpen(false), []);
 
   const handleImported = useCallback(
     (agent: { id: string; cwd: string }) => {
       if (!importServerId) return;
       void (async () => {
-        await openImportedProject(agent.cwd);
-        router.push(buildHostAgentDetailRoute(importServerId, agent.id) as Href);
+        const result = await openImportedProject(agent.cwd);
+        if (result.ok) {
+          router.push(buildHostAgentDetailRoute(importServerId, agent.id) as Href);
+        }
       })();
     },
     [importServerId, openImportedProject, router],
@@ -86,12 +80,11 @@ export function OpenProjectScreen() {
   const handleOpenProviders = useCallback(() => {
     chooseHost({
       title: "Choose host",
-      onNoHosts: handleNoHosts,
       onChooseHost: (serverId) => {
         router.push(buildSettingsHostSectionRoute(serverId, "providers"));
       },
     });
-  }, [chooseHost, handleNoHosts, router]);
+  }, [chooseHost, router]);
 
   return (
     <View style={styles.container}>

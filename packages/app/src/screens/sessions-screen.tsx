@@ -1,4 +1,4 @@
-import { useMemo, useState, useCallback, useEffect, useRef, type ReactNode } from "react";
+import { useMemo, useState, useCallback, useEffect, useRef } from "react";
 import { Pressable, type PressableStateCallbackType, View, Text } from "react-native";
 import { useIsFocused } from "@react-navigation/native";
 import { router } from "expo-router";
@@ -9,15 +9,16 @@ import { MenuHeader } from "@/components/headers/menu-header";
 import { Button } from "@/components/ui/button";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { AgentList } from "@/components/agent-list";
-import { HostStatusDotSlot } from "@/components/hosts/host-picker-options";
-import { Combobox, ComboboxItem, type ComboboxOption } from "@/components/ui/combobox";
+import { HostStatusDotSlot } from "@/components/hosts/host-picker";
+import {
+  ALL_HOSTS_OPTION_ID,
+  getHostPickerLabel,
+  HostPicker,
+} from "@/components/hosts/host-picker";
 import { useAgentHistory } from "@/hooks/use-agent-history";
-import { useLocalDaemonServerId } from "@/hooks/use-is-local-daemon";
 import { useHosts } from "@/runtime/host-runtime";
-import { orderHostsLocalFirst, type HostProfile } from "@/types/host-connection";
+import { type HostProfile } from "@/types/host-connection";
 import { buildOpenProjectRoute } from "@/utils/host-routes";
-
-const ALL_HOSTS_FILTER_VALUE = "__all_hosts__";
 
 export function SessionsScreen() {
   const isFocused = useIsFocused();
@@ -42,17 +43,9 @@ function SessionsHostFilter({
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const filterAnchorRef = useRef<View>(null);
 
-  const filterComboboxOptions = useMemo<ComboboxOption[]>(
-    () => [
-      { id: ALL_HOSTS_FILTER_VALUE, label: "All hosts" },
-      ...hosts.map((host) => ({ id: host.serverId, label: host.label })),
-    ],
-    [hosts],
-  );
-
   const selectedHostLabel = useMemo(
-    () => filterComboboxOptions.find((option) => option.id === selectedHost)?.label ?? "All hosts",
-    [filterComboboxOptions, selectedHost],
+    () => getHostPickerLabel(hosts, selectedHost, { includeAllHost: true }),
+    [hosts, selectedHost],
   );
 
   const handleFilterOpen = useCallback(() => setIsFilterOpen(true), []);
@@ -66,79 +59,39 @@ function SessionsHostFilter({
     [],
   );
 
-  const handleFilterSelect = useCallback(
-    (id: string) => {
-      onSelectHost(id);
-      setIsFilterOpen(false);
-    },
-    [onSelectHost],
-  );
-
-  const filterOptionIcons = useMemo(() => {
-    const map = new Map<string, ReactNode>();
-    map.set(ALL_HOSTS_FILTER_VALUE, <Server size={14} color={theme.colors.foregroundMuted} />);
-    for (const host of hosts) {
-      map.set(host.serverId, <HostStatusDotSlot serverId={host.serverId} />);
-    }
-    return map;
-  }, [hosts, theme.colors.foregroundMuted]);
-
-  const renderFilterOption = useCallback(
-    ({
-      option,
-      selected,
-      active,
-      onPress,
-    }: {
-      option: ComboboxOption;
-      selected: boolean;
-      active: boolean;
-      onPress: () => void;
-    }) => (
-      <ComboboxItem
-        label={option.label}
-        selected={selected}
-        active={active}
-        onPress={onPress}
-        leadingSlot={filterOptionIcons.get(option.id)}
-      />
-    ),
-    [filterOptionIcons],
-  );
-
   return (
-    <View ref={filterAnchorRef} collapsable={false} style={styles.filterTriggerWrap}>
-      <Pressable
-        onPress={handleFilterOpen}
-        style={filterTriggerStyle}
-        testID="sessions-host-filter-trigger"
-        accessibilityRole="button"
-        accessibilityLabel={`Filter: ${selectedHostLabel}`}
-      >
-        {selectedHost === ALL_HOSTS_FILTER_VALUE ? (
-          <Server size={14} color={theme.colors.foregroundMuted} />
-        ) : (
-          <HostStatusDotSlot serverId={selectedHost} />
-        )}
-        <Text style={styles.filterTriggerText} numberOfLines={1}>
-          {selectedHostLabel}
-        </Text>
-        <ChevronDown size={14} color={theme.colors.foregroundMuted} />
-      </Pressable>
-      <Combobox
-        options={filterComboboxOptions}
-        value={selectedHost}
-        onSelect={handleFilterSelect}
-        renderOption={renderFilterOption}
-        searchable={false}
-        title="Filter by host"
-        open={isFilterOpen}
-        onOpenChange={setIsFilterOpen}
-        anchorRef={filterAnchorRef}
-        desktopPlacement="bottom-start"
-        desktopPreventInitialFlash
-      />
-    </View>
+    <HostPicker
+      hosts={hosts}
+      value={selectedHost}
+      onSelect={onSelectHost}
+      open={isFilterOpen}
+      onOpenChange={setIsFilterOpen}
+      anchorRef={filterAnchorRef}
+      includeAllHost
+      searchable={false}
+      title="Filter by host"
+      desktopPlacement="bottom-start"
+    >
+      <View ref={filterAnchorRef} collapsable={false} style={styles.filterTriggerWrap}>
+        <Pressable
+          onPress={handleFilterOpen}
+          style={filterTriggerStyle}
+          testID="sessions-host-filter-trigger"
+          accessibilityRole="button"
+          accessibilityLabel={`Filter: ${selectedHostLabel}`}
+        >
+          {selectedHost === ALL_HOSTS_OPTION_ID ? (
+            <Server size={14} color={theme.colors.foregroundMuted} />
+          ) : (
+            <HostStatusDotSlot serverId={selectedHost} />
+          )}
+          <Text style={styles.filterTriggerText} numberOfLines={1}>
+            {selectedHostLabel}
+          </Text>
+          <ChevronDown size={14} color={theme.colors.foregroundMuted} />
+        </Pressable>
+      </View>
+    </HostPicker>
   );
 }
 
@@ -146,13 +99,8 @@ function SessionsScreenContent() {
   const { theme } = useUnistyles();
   const { t } = useTranslation();
   const hosts = useHosts();
-  const localServerId = useLocalDaemonServerId();
-  const orderedHosts = useMemo(
-    () => orderHostsLocalFirst(hosts, localServerId),
-    [hosts, localServerId],
-  );
-  const [selectedHost, setSelectedHost] = useState(ALL_HOSTS_FILTER_VALUE);
-  const historyServerId = selectedHost === ALL_HOSTS_FILTER_VALUE ? null : selectedHost;
+  const [selectedHost, setSelectedHost] = useState(ALL_HOSTS_OPTION_ID);
+  const historyServerId = selectedHost === ALL_HOSTS_OPTION_ID ? null : selectedHost;
   const { agents, hasMore, isInitialLoad, isLoadingMore, isError, loadMore, refreshAll } =
     useAgentHistory({
       serverId: historyServerId,
@@ -160,12 +108,12 @@ function SessionsScreenContent() {
 
   useEffect(() => {
     if (
-      selectedHost !== ALL_HOSTS_FILTER_VALUE &&
-      !orderedHosts.some((host) => host.serverId === selectedHost)
+      selectedHost !== ALL_HOSTS_OPTION_ID &&
+      !hosts.some((host) => host.serverId === selectedHost)
     ) {
-      setSelectedHost(ALL_HOSTS_FILTER_VALUE);
+      setSelectedHost(ALL_HOSTS_OPTION_ID);
     }
-  }, [orderedHosts, selectedHost]);
+  }, [hosts, selectedHost]);
 
   const [isManualRefresh, setIsManualRefresh] = useState(false);
 
@@ -179,8 +127,8 @@ function SessionsScreenContent() {
   }, [agents]);
 
   const emptyText =
-    selectedHost === ALL_HOSTS_FILTER_VALUE ? t("sessions.empty") : "No sessions for this host";
-  const showHostFilter = orderedHosts.length > 1;
+    selectedHost === ALL_HOSTS_OPTION_ID ? t("sessions.empty") : "No sessions for this host";
+  const showHostFilter = hosts.length > 1;
   const showLoadError = isError && sortedAgents.length === 0;
 
   const handleBack = useCallback(() => {
@@ -205,7 +153,7 @@ function SessionsScreenContent() {
       {showHostFilter ? (
         <View style={styles.filterContainer}>
           <SessionsHostFilter
-            hosts={orderedHosts}
+            hosts={hosts}
             selectedHost={selectedHost}
             onSelectHost={setSelectedHost}
           />

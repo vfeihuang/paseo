@@ -8,25 +8,29 @@ import {
   View,
   type PressableStateCallbackType,
 } from "react-native";
+import { useQuery } from "@tanstack/react-query";
+import { useTranslation } from "react-i18next";
 import { Folder } from "lucide-react-native";
 import { StyleSheet, useUnistyles } from "react-native-unistyles";
-import { useQuery } from "@tanstack/react-query";
-import { shortenPath } from "@/utils/shorten-path";
-import { useRecommendedProjectPaths } from "@/stores/session-store-hooks";
-import { useHostRuntimeClient, useHostRuntimeIsConnected } from "@/runtime/host-runtime";
+import { getOpenProjectFailureReason, type OpenProjectFailureReason } from "@/hooks/open-project";
 import { useOpenProject } from "@/hooks/use-open-project";
-import { buildWorkingDirectorySuggestions } from "@/utils/working-directory-suggestions";
-import { isNative } from "@/constants/platform";
+import { useHostRuntimeClient, useHostRuntimeIsConnected } from "@/runtime/host-runtime";
 import { useProjectPickerStore } from "@/stores/project-picker-store";
+import { useRecommendedProjectPaths } from "@/stores/session-store-hooks";
+import { shortenPath } from "@/utils/shorten-path";
+import { isNative } from "@/constants/platform";
+import { buildProjectPickerOptions, type ProjectPickerOption } from "./project-picker-options";
 
 interface PathRowProps {
-  path: string;
+  option: ProjectPickerOption;
   active: boolean;
   onSelect: (path: string) => void;
 }
 
-function PathRow({ path, active, onSelect }: PathRowProps) {
+function PathRow({ option, active, onSelect }: PathRowProps) {
   const { theme } = useUnistyles();
+  const { t } = useTranslation();
+  const path = option.path;
   const handlePress = useCallback(() => {
     onSelect(path);
   }, [onSelect, path]);
@@ -43,6 +47,10 @@ function PathRow({ path, active, onSelect }: PathRowProps) {
     () => [styles.rowText, { color: theme.colors.foreground }],
     [theme.colors.foreground],
   );
+  const rowActionTextStyle = useMemo(
+    () => [styles.rowActionText, { color: theme.colors.foregroundMuted }],
+    [theme.colors.foregroundMuted],
+  );
   return (
     <Pressable style={pressableStyle} onPress={handlePress}>
       <View style={styles.rowContent}>
@@ -52,6 +60,9 @@ function PathRow({ path, active, onSelect }: PathRowProps) {
         <Text style={rowTextStyle} numberOfLines={1}>
           {shortenPath(path)}
         </Text>
+        {option.kind === "path" ? (
+          <Text style={rowActionTextStyle}>{t("projectPicker.openPath")}</Text>
+        ) : null}
       </View>
     </Pressable>
   );
@@ -59,6 +70,7 @@ function PathRow({ path, active, onSelect }: PathRowProps) {
 
 export function ProjectPickerModal() {
   const { theme } = useUnistyles();
+  const { t } = useTranslation();
   const request = useProjectPickerStore((state) => state.request);
   const close = useProjectPickerStore((state) => state.close);
   const serverId = request?.serverId ?? null;
@@ -72,6 +84,7 @@ export function ProjectPickerModal() {
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [openErrorReason, setOpenErrorReason] = useState<OpenProjectFailureReason | null>(null);
   const openProject = useOpenProject(serverId);
 
   const directorySuggestionsQuery = useQuery({
@@ -93,18 +106,23 @@ export function ProjectPickerModal() {
     retry: false,
   });
 
-  const options = useMemo(() => {
-    const suggestedPaths = buildWorkingDirectorySuggestions({
-      recommendedPaths,
-      serverPaths: directorySuggestionsQuery.data ?? [],
-      query,
-    });
-    const trimmedQuery = query.trim();
-    if (!trimmedQuery || suggestedPaths.includes(trimmedQuery)) {
-      return suggestedPaths;
+  const options = useMemo(
+    () =>
+      buildProjectPickerOptions({
+        recommendedPaths,
+        serverPaths: directorySuggestionsQuery.data ?? [],
+        query,
+      }),
+    [directorySuggestionsQuery.data, query, recommendedPaths],
+  );
+
+  const openErrorMessage = useMemo(() => {
+    if (!openErrorReason) {
+      return null;
     }
-    return [trimmedQuery, ...suggestedPaths];
-  }, [query, directorySuggestionsQuery.data, recommendedPaths]);
+
+    return t(`projectPicker.errors.${openErrorReason}`);
+  }, [openErrorReason, t]);
 
   const handleClose = useCallback(() => {
     close();
@@ -115,12 +133,16 @@ export function ProjectPickerModal() {
       const trimmed = path.trim();
       if (!trimmed || !client || !serverId) return;
 
+      setOpenErrorReason(null);
       setIsSubmitting(true);
       try {
-        const didOpenProject = await openProject(trimmed);
-        if (didOpenProject) {
+        const result = await openProject(trimmed);
+        if (result.ok) {
           close();
+          return;
         }
+
+        setOpenErrorReason(getOpenProjectFailureReason(result));
       } finally {
         setIsSubmitting(false);
       }
@@ -128,28 +150,28 @@ export function ProjectPickerModal() {
     [client, close, openProject, serverId],
   );
 
-  const handleSubmitCustom = useCallback(() => {
-    const trimmed = query.trim();
-    if (!trimmed) return;
-    void handleSelectPath(trimmed);
-  }, [handleSelectPath, query]);
+  const submitActiveOption = useCallback(() => {
+    const option = options[activeIndex];
+    if (!option) return;
+    void handleSelectPath(option.path);
+  }, [activeIndex, handleSelectPath, options]);
 
   const handleChangeQuery = useCallback((text: string) => {
     setQuery(text);
     setActiveIndex(0);
+    setOpenErrorReason(null);
   }, []);
 
-  // Reset state when opening/closing
   useEffect(() => {
     if (open) {
       setQuery("");
       setActiveIndex(0);
+      setOpenErrorReason(null);
       const id = setTimeout(() => inputRef.current?.focus(), 0);
       return () => clearTimeout(id);
     }
   }, [open]);
 
-  // Clamp active index
   useEffect(() => {
     if (!open) return;
     if (activeIndex >= options.length) {
@@ -157,7 +179,6 @@ export function ProjectPickerModal() {
     }
   }, [activeIndex, options.length, open]);
 
-  // Keyboard navigation
   useEffect(() => {
     if (!open || isNative) return;
 
@@ -173,11 +194,7 @@ export function ProjectPickerModal() {
 
       if (key === "Enter") {
         event.preventDefault();
-        if (options.length > 0 && activeIndex < options.length) {
-          void handleSelectPath(options[activeIndex]);
-        } else if (query.trim()) {
-          handleSubmitCustom();
-        }
+        submitActiveOption();
         return;
       }
 
@@ -196,7 +213,7 @@ export function ProjectPickerModal() {
 
     window.addEventListener("keydown", handler, true);
     return () => window.removeEventListener("keydown", handler, true);
-  }, [activeIndex, close, handleSelectPath, handleSubmitCustom, open, options, query]);
+  }, [close, open, options.length, submitActiveOption]);
 
   const panelStyle = useMemo(
     () => [
@@ -220,6 +237,10 @@ export function ProjectPickerModal() {
     () => [styles.emptyText, { color: theme.colors.foregroundMuted }],
     [theme.colors.foregroundMuted],
   );
+  const errorTextStyle = useMemo(
+    () => [styles.emptyText, { color: theme.colors.destructive }],
+    [theme.colors.destructive],
+  );
 
   if (!serverId) return null;
 
@@ -234,7 +255,7 @@ export function ProjectPickerModal() {
               ref={inputRef}
               value={query}
               onChangeText={handleChangeQuery}
-              placeholder="Type a directory path..."
+              placeholder={t("projectPicker.placeholder")}
               placeholderTextColor={theme.colors.foregroundMuted}
               style={inputStyle}
               autoCapitalize="none"
@@ -242,7 +263,7 @@ export function ProjectPickerModal() {
               autoFocus
               editable={!isSubmitting}
               returnKeyType="go"
-              onSubmitEditing={handleSubmitCustom}
+              onSubmitEditing={submitActiveOption}
             />
           </View>
 
@@ -252,16 +273,19 @@ export function ProjectPickerModal() {
             keyboardShouldPersistTaps="always"
             showsVerticalScrollIndicator={false}
           >
-            {isSubmitting ? <Text style={emptyTextStyle}>Opening project...</Text> : null}
+            {isSubmitting ? <Text style={emptyTextStyle}>{t("projectPicker.opening")}</Text> : null}
+            {!isSubmitting && openErrorMessage ? (
+              <Text style={errorTextStyle}>{openErrorMessage}</Text>
+            ) : null}
             {!isSubmitting && options.length === 0 && !query.trim() ? (
-              <Text style={emptyTextStyle}>Start typing a path</Text>
+              <Text style={emptyTextStyle}>{t("projectPicker.empty")}</Text>
             ) : null}
             {!isSubmitting && !(options.length === 0 && !query.trim()) ? (
               <>
-                {options.map((path, index) => (
+                {options.map((option, index) => (
                   <PathRow
-                    key={path}
-                    path={path}
+                    key={`${option.kind}:${option.path}`}
+                    option={option}
                     active={index === activeIndex}
                     onSelect={handleSelectPath}
                   />
@@ -330,7 +354,12 @@ const styles = StyleSheet.create((theme) => ({
     fontSize: theme.fontSize.base,
     fontWeight: "400",
     lineHeight: 20,
+    flex: 1,
     flexShrink: 1,
+  },
+  rowActionText: {
+    fontSize: theme.fontSize.xs,
+    fontWeight: "500",
   },
   emptyText: {
     paddingHorizontal: theme.spacing[4],
