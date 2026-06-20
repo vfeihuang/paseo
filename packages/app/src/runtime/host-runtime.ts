@@ -25,6 +25,7 @@ import {
 import { resolveAppVersion } from "@/utils/app-version";
 import { ConnectionOfferSchema, type ConnectionOffer } from "@getpaseo/protocol/connection-offer";
 import { shouldUseDesktopDaemon } from "@/desktop/daemon/desktop-daemon";
+import { isWeb } from "@/constants/platform";
 import { connectToDaemon } from "@/utils/test-daemon-connection";
 import { getOrCreateClientId } from "@/utils/client-id";
 import {
@@ -1273,6 +1274,34 @@ const REGISTRY_STORAGE_KEY = "@paseo:daemon-registry";
 const LOCALHOST_FALLBACK_ENDPOINT = "localhost:6767";
 const DEFAULT_LOCALHOST_BOOTSTRAP_TIMEOUT_MS = 2500;
 const E2E_STORAGE_KEY = "@paseo:e2e";
+const INITIAL_DAEMON_CONNECTION_HINT_GLOBAL_KEY = "__PASEO_INITIAL_DAEMON_CONNECTION__";
+
+export interface InitialDaemonConnectionHint {
+  listen: string;
+  useTls?: boolean;
+}
+
+function isInitialConnectionHintRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+export function readInitialDaemonConnectionHint(): InitialDaemonConnectionHint | null {
+  if (!isWeb || typeof globalThis === "undefined") {
+    return null;
+  }
+  const value = (globalThis as Record<string, unknown>)[INITIAL_DAEMON_CONNECTION_HINT_GLOBAL_KEY];
+  if (!isInitialConnectionHintRecord(value)) {
+    return null;
+  }
+  const listen = typeof value.listen === "string" ? value.listen.trim() : "";
+  if (!listen) {
+    return null;
+  }
+  return {
+    listen,
+    useTls: value.useTls === true,
+  };
+}
 
 function readConfiguredLocalDaemonOverride(): string | null {
   const value = process.env.EXPO_PUBLIC_LOCAL_DAEMON?.trim();
@@ -1364,6 +1393,14 @@ export class HostRuntimeStore {
 
     if (shouldUseDesktopDaemon()) {
       return;
+    }
+
+    const initialHint = readInitialDaemonConnectionHint();
+    if (initialHint) {
+      const bootstrapped = await this.bootstrapInitialConnectionHint(initialHint);
+      if (bootstrapped) {
+        return;
+      }
     }
 
     if (override) {
@@ -1466,6 +1503,37 @@ export class HostRuntimeStore {
         }
         await delay(CONFIGURED_OVERRIDE_BOOTSTRAP_RETRY_MS);
       }
+    }
+  }
+
+  private async bootstrapInitialConnectionHint(
+    hint: InitialDaemonConnectionHint,
+  ): Promise<boolean> {
+    const connection = connectionFromListen(hint.listen);
+    if (!connection) {
+      return false;
+    }
+    const connectionWithHint: HostConnection =
+      connection.type === "directTcp"
+        ? { ...connection, useTls: hint.useTls ?? connection.useTls ?? false }
+        : connection;
+    if (registryHasConnection(this.hosts, connectionWithHint)) {
+      return true;
+    }
+
+    try {
+      await this.probeAndUpsertConnection({
+        connection: connectionWithHint,
+        timeoutMs: DEFAULT_LOCALHOST_BOOTSTRAP_TIMEOUT_MS,
+      });
+      return true;
+    } catch (error) {
+      console.warn("[HostRuntime] initial connection hint probe failed", {
+        listen: hint.listen,
+        useTls: hint.useTls,
+        error,
+      });
+      return false;
     }
   }
 

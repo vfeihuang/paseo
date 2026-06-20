@@ -11,8 +11,25 @@ import { useSessionStore, type Agent } from "@/stores/session-store";
 import {
   HostRuntimeController,
   HostRuntimeStore,
+  readInitialDaemonConnectionHint,
   type HostRuntimeControllerDeps,
 } from "./host-runtime";
+
+vi.mock("@/constants/platform", () => ({
+  isWeb: true,
+  isNative: false,
+  isDev: false,
+  getIsElectron: vi.fn(() => false),
+  getIsElectronMac: vi.fn(() => false),
+}));
+
+vi.mock("@react-native-async-storage/async-storage", () => ({
+  default: {
+    getItem: vi.fn(),
+    setItem: vi.fn(),
+    removeItem: vi.fn(),
+  },
+}));
 
 class FakeDaemonClient {
   private state: ConnectionState = { status: "idle" };
@@ -122,6 +139,8 @@ class FakeDaemonClient {
 
 afterEach(() => {
   vi.useRealTimers();
+  delete (globalThis as Record<string, unknown>).__PASEO_INITIAL_DAEMON_CONNECTION__;
+  delete (globalThis as { window?: unknown }).window;
 });
 
 function useHostRuntimeClock(): void {
@@ -1883,5 +1902,122 @@ describe("HostRuntimeStore", () => {
     expect(pairedHost?.label).toBe("mbp");
 
     store.syncHosts([]);
+  });
+});
+
+describe("readInitialDaemonConnectionHint", () => {
+  it("returns null when no hint is present", () => {
+    expect(readInitialDaemonConnectionHint()).toBeNull();
+  });
+
+  it("parses a valid listen-only hint", () => {
+    (globalThis as Record<string, unknown>).__PASEO_INITIAL_DAEMON_CONNECTION__ = {
+      listen: "localhost:6767",
+    };
+    expect(readInitialDaemonConnectionHint()).toEqual({ listen: "localhost:6767", useTls: false });
+  });
+
+  it("preserves useTls when explicitly true", () => {
+    (globalThis as Record<string, unknown>).__PASEO_INITIAL_DAEMON_CONNECTION__ = {
+      listen: "paseo.example.com:443",
+      useTls: true,
+    };
+    expect(readInitialDaemonConnectionHint()).toEqual({
+      listen: "paseo.example.com:443",
+      useTls: true,
+    });
+  });
+
+  it("ignores invalid shapes", () => {
+    (globalThis as Record<string, unknown>).__PASEO_INITIAL_DAEMON_CONNECTION__ = "localhost:6767";
+    expect(readInitialDaemonConnectionHint()).toBeNull();
+
+    (globalThis as Record<string, unknown>).__PASEO_INITIAL_DAEMON_CONNECTION__ = {
+      useTls: true,
+    };
+    expect(readInitialDaemonConnectionHint()).toBeNull();
+  });
+});
+
+describe("HostRuntimeStore initial connection hint bootstrap", () => {
+  function waitFor(predicate: () => boolean, timeoutMs = 200): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const start = Date.now();
+      const check = (): void => {
+        if (predicate()) {
+          resolve();
+          return;
+        }
+        if (Date.now() - start > timeoutMs) {
+          reject(new Error("timed out waiting for predicate"));
+          return;
+        }
+        setTimeout(check, 0);
+      };
+      check();
+    });
+  }
+
+  it("attempts the explicit initial connection hint before default localhost bootstrap", async () => {
+    const seenProbes: { endpoint: string; useTls?: boolean }[] = [];
+    const store = new HostRuntimeStore({
+      deps: {
+        createClient: () => new FakeDaemonClient() as unknown as DaemonClient,
+        connectToDaemon: async ({ connection }) => {
+          if (connection.type === "directTcp") {
+            seenProbes.push({ endpoint: connection.endpoint, useTls: connection.useTls });
+          }
+          return {
+            client: makeConnectedProbeClient(5) as unknown as DaemonClient,
+            serverId: "srv_hint",
+            hostname: "hint host",
+          };
+        },
+        getClientId: async () => "cid_test_runtime",
+      },
+    });
+
+    (globalThis as Record<string, unknown>).__PASEO_INITIAL_DAEMON_CONNECTION__ = {
+      listen: "daemon-origin:6767",
+      useTls: true,
+    };
+    store.boot();
+    await waitFor(() => store.getHosts().length > 0);
+
+    expect(seenProbes).toContainEqual({ endpoint: "daemon-origin:6767", useTls: true });
+    const host = store.getHosts()[0];
+    expect(host?.serverId).toBe("srv_hint");
+    expect(host?.connections).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ endpoint: "daemon-origin:6767", useTls: true }),
+      ]),
+    );
+
+    store.syncHosts([]);
+  });
+
+  it("does not infer window.location.host when no explicit hint is present", async () => {
+    const seenProbes: { endpoint: string; useTls?: boolean }[] = [];
+    const store = new HostRuntimeStore({
+      deps: {
+        createClient: () => new FakeDaemonClient() as unknown as DaemonClient,
+        connectToDaemon: async ({ connection }) => {
+          if (connection.type === "directTcp") {
+            seenProbes.push({ endpoint: connection.endpoint, useTls: connection.useTls });
+          }
+          throw new Error("probe unavailable");
+        },
+        getClientId: async () => "cid_test_runtime",
+      },
+    });
+
+    (globalThis as { window?: unknown }).window = {
+      location: { host: "metro-host:8081", protocol: "http:" },
+    };
+    store.boot();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(seenProbes).not.toContainEqual(expect.objectContaining({ endpoint: "metro-host:8081" }));
+    expect(store.getHosts()).toHaveLength(0);
   });
 });
