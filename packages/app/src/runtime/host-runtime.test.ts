@@ -13,23 +13,8 @@ import {
   HostRuntimeStore,
   readInitialDaemonConnectionHint,
   type HostRuntimeControllerDeps,
+  type HostRuntimeStorage,
 } from "./host-runtime";
-
-vi.mock("@/constants/platform", () => ({
-  isWeb: true,
-  isNative: false,
-  isDev: false,
-  getIsElectron: vi.fn(() => false),
-  getIsElectronMac: vi.fn(() => false),
-}));
-
-vi.mock("@react-native-async-storage/async-storage", () => ({
-  default: {
-    getItem: vi.fn(),
-    setItem: vi.fn(),
-    removeItem: vi.fn(),
-  },
-}));
 
 class FakeDaemonClient {
   private state: ConnectionState = { status: "idle" };
@@ -329,6 +314,32 @@ function makeConnectedProbeClient(latencyMs: number): FakeDaemonClient {
   client.setConnectionState({ status: "connected" });
   client.ping = async () => ({ rttMs: latencyMs });
   return client;
+}
+
+function createMemoryHostRuntimeStorage(entries: Record<string, string> = {}): HostRuntimeStorage {
+  const values = new Map(Object.entries(entries));
+  return {
+    getItem: async (key) => values.get(key) ?? null,
+    setItem: async (key, value) => {
+      values.set(key, value);
+    },
+  };
+}
+
+function onceHostListMatches(store: HostRuntimeStore, predicate: () => boolean): Promise<void> {
+  if (predicate()) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    let unsubscribe = (): void => {};
+    unsubscribe = store.subscribeHostList(() => {
+      if (!predicate()) {
+        return;
+      }
+      unsubscribe();
+      resolve();
+    });
+  });
 }
 
 describe("HostRuntimeController", () => {
@@ -1907,14 +1918,17 @@ describe("HostRuntimeStore", () => {
 
 describe("readInitialDaemonConnectionHint", () => {
   it("returns null when no hint is present", () => {
-    expect(readInitialDaemonConnectionHint()).toBeNull();
+    expect(readInitialDaemonConnectionHint({ isWebRuntime: true })).toBeNull();
   });
 
   it("parses a valid listen-only hint", () => {
     (globalThis as Record<string, unknown>).__PASEO_INITIAL_DAEMON_CONNECTION__ = {
       listen: "localhost:6767",
     };
-    expect(readInitialDaemonConnectionHint()).toEqual({ listen: "localhost:6767", useTls: false });
+    expect(readInitialDaemonConnectionHint({ isWebRuntime: true })).toEqual({
+      listen: "localhost:6767",
+      useTls: false,
+    });
   });
 
   it("preserves useTls when explicitly true", () => {
@@ -1922,7 +1936,7 @@ describe("readInitialDaemonConnectionHint", () => {
       listen: "paseo.example.com:443",
       useTls: true,
     };
-    expect(readInitialDaemonConnectionHint()).toEqual({
+    expect(readInitialDaemonConnectionHint({ isWebRuntime: true })).toEqual({
       listen: "paseo.example.com:443",
       useTls: true,
     });
@@ -1930,34 +1944,16 @@ describe("readInitialDaemonConnectionHint", () => {
 
   it("ignores invalid shapes", () => {
     (globalThis as Record<string, unknown>).__PASEO_INITIAL_DAEMON_CONNECTION__ = "localhost:6767";
-    expect(readInitialDaemonConnectionHint()).toBeNull();
+    expect(readInitialDaemonConnectionHint({ isWebRuntime: true })).toBeNull();
 
     (globalThis as Record<string, unknown>).__PASEO_INITIAL_DAEMON_CONNECTION__ = {
       useTls: true,
     };
-    expect(readInitialDaemonConnectionHint()).toBeNull();
+    expect(readInitialDaemonConnectionHint({ isWebRuntime: true })).toBeNull();
   });
 });
 
 describe("HostRuntimeStore initial connection hint bootstrap", () => {
-  function waitFor(predicate: () => boolean, timeoutMs = 200): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const start = Date.now();
-      const check = (): void => {
-        if (predicate()) {
-          resolve();
-          return;
-        }
-        if (Date.now() - start > timeoutMs) {
-          reject(new Error("timed out waiting for predicate"));
-          return;
-        }
-        setTimeout(check, 0);
-      };
-      check();
-    });
-  }
-
   it("attempts the explicit initial connection hint before default localhost bootstrap", async () => {
     const seenProbes: { endpoint: string; useTls?: boolean }[] = [];
     const store = new HostRuntimeStore({
@@ -1974,15 +1970,17 @@ describe("HostRuntimeStore initial connection hint bootstrap", () => {
           };
         },
         getClientId: async () => "cid_test_runtime",
+        readInitialConnectionHint: () => ({
+          listen: "daemon-origin:6767",
+          useTls: true,
+        }),
       },
+      storage: createMemoryHostRuntimeStorage(),
     });
 
-    (globalThis as Record<string, unknown>).__PASEO_INITIAL_DAEMON_CONNECTION__ = {
-      listen: "daemon-origin:6767",
-      useTls: true,
-    };
+    const hostAdded = onceHostListMatches(store, () => store.getHosts().length > 0);
     store.boot();
-    await waitFor(() => store.getHosts().length > 0);
+    await hostAdded;
 
     expect(seenProbes).toContainEqual({ endpoint: "daemon-origin:6767", useTls: true });
     const host = store.getHosts()[0];
@@ -1998,6 +1996,7 @@ describe("HostRuntimeStore initial connection hint bootstrap", () => {
 
   it("does not infer window.location.host when no explicit hint is present", async () => {
     const seenProbes: { endpoint: string; useTls?: boolean }[] = [];
+    const firstProbe = createDeferred<void>();
     const store = new HostRuntimeStore({
       deps: {
         createClient: () => new FakeDaemonClient() as unknown as DaemonClient,
@@ -2005,17 +2004,20 @@ describe("HostRuntimeStore initial connection hint bootstrap", () => {
           if (connection.type === "directTcp") {
             seenProbes.push({ endpoint: connection.endpoint, useTls: connection.useTls });
           }
+          firstProbe.resolve();
           throw new Error("probe unavailable");
         },
         getClientId: async () => "cid_test_runtime",
+        readInitialConnectionHint: () => null,
       },
+      storage: createMemoryHostRuntimeStorage(),
     });
 
     (globalThis as { window?: unknown }).window = {
       location: { host: "metro-host:8081", protocol: "http:" },
     };
     store.boot();
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await firstProbe.promise;
 
     expect(seenProbes).not.toContainEqual(expect.objectContaining({ endpoint: "metro-host:8081" }));
     expect(store.getHosts()).toHaveLength(0);

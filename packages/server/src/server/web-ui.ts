@@ -243,6 +243,13 @@ function sendIndexHtml(
   }
 }
 
+function serializeInlineScriptJson(value: unknown): string {
+  return JSON.stringify(value)
+    .replace(/</g, "\\u003C")
+    .replace(/>/g, "\\u003E")
+    .replace(/&/g, "\\u0026");
+}
+
 function injectConnectionHint(
   html: string,
   req: Parameters<RequestHandler>[0],
@@ -255,7 +262,7 @@ function injectConnectionHint(
     useTls,
     label,
   };
-  const script = `<script>window.__PASEO_INITIAL_DAEMON_CONNECTION__=${JSON.stringify(hint)}</script>`;
+  const script = `<script>window.__PASEO_INITIAL_DAEMON_CONNECTION__=${serializeInlineScriptJson(hint)}</script>`;
   const headClose = /<\/head>/i;
   if (headClose.test(html)) {
     return html.replace(headClose, `${script}</head>`);

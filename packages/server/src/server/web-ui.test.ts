@@ -165,6 +165,18 @@ describe("daemon web UI route module", () => {
     expect(res.body).toMatch(/window\.__PASEO_INITIAL_DAEMON_CONNECTION__.*<\/head>/);
   });
 
+  test("escapes the injected host hint for inline script safety", async () => {
+    const app = createApp({ enabled: true, distDir, publicDir });
+
+    const res = await request(app, "GET", "/", {
+      host: "evil.test</script><script>alert(1)</script>",
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toContain("evil.test\\u003C/script\\u003E");
+    expect(res.body).not.toContain("evil.test</script>");
+  });
+
   test("falls back to index.html for SPA deep links", async () => {
     const app = createApp({ enabled: true, distDir, publicDir });
 

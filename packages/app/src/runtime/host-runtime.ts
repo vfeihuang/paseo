@@ -137,6 +137,12 @@ export interface HostRuntimeControllerDeps {
     hostname: string | null;
   }>;
   getClientId: () => Promise<string>;
+  readInitialConnectionHint?: () => InitialDaemonConnectionHint | null;
+}
+
+export interface HostRuntimeStorage {
+  getItem: (key: string) => Promise<string | null>;
+  setItem: (key: string, value: string) => Promise<void>;
 }
 
 export interface HostRuntimeStartOptions {
@@ -1285,8 +1291,11 @@ function isInitialConnectionHintRecord(value: unknown): value is Record<string, 
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-export function readInitialDaemonConnectionHint(): InitialDaemonConnectionHint | null {
-  if (!isWeb || typeof globalThis === "undefined") {
+export function readInitialDaemonConnectionHint(input?: {
+  isWebRuntime?: boolean;
+}): InitialDaemonConnectionHint | null {
+  const isWebRuntime = input?.isWebRuntime ?? isWeb;
+  if (!isWebRuntime || typeof globalThis === "undefined") {
     return null;
   }
   const value = (globalThis as Record<string, unknown>)[INITIAL_DAEMON_CONNECTION_HINT_GLOBAL_KEY];
@@ -1343,9 +1352,11 @@ export class HostRuntimeStore {
   private agentDirectoryBootstrapInFlight = new Map<string, Promise<void>>();
   private configuredOverrideBootstrapInFlight: Promise<void> | null = null;
   private bootStarted = false;
+  private storage: HostRuntimeStorage;
 
-  constructor(input?: { deps?: HostRuntimeControllerDeps }) {
+  constructor(input?: { deps?: HostRuntimeControllerDeps; storage?: HostRuntimeStorage }) {
     this.deps = input?.deps ?? createDefaultDeps();
+    this.storage = input?.storage ?? AsyncStorage;
   }
 
   // --- Host registry ---
@@ -1383,7 +1394,7 @@ export class HostRuntimeStore {
 
     let isE2E: string | null = null;
     try {
-      isE2E = await AsyncStorage.getItem(E2E_STORAGE_KEY);
+      isE2E = await this.storage.getItem(E2E_STORAGE_KEY);
     } catch {
       return;
     }
@@ -1395,7 +1406,9 @@ export class HostRuntimeStore {
       return;
     }
 
-    const initialHint = readInitialDaemonConnectionHint();
+    const initialHint = this.deps.readInitialConnectionHint
+      ? this.deps.readInitialConnectionHint()
+      : readInitialDaemonConnectionHint();
     if (initialHint) {
       const bootstrapped = await this.bootstrapInitialConnectionHint(initialHint);
       if (bootstrapped) {
@@ -1413,7 +1426,7 @@ export class HostRuntimeStore {
   private async loadFromStorage(): Promise<void> {
     let shouldPersistHosts = false;
     try {
-      const stored = await AsyncStorage.getItem(REGISTRY_STORAGE_KEY);
+      const stored = await this.storage.getItem(REGISTRY_STORAGE_KEY);
       if (!stored) {
         return;
       }
@@ -1814,7 +1827,7 @@ export class HostRuntimeStore {
 
   private async persistHosts(): Promise<void> {
     try {
-      await AsyncStorage.setItem(REGISTRY_STORAGE_KEY, JSON.stringify(this.hosts));
+      await this.storage.setItem(REGISTRY_STORAGE_KEY, JSON.stringify(this.hosts));
     } catch (error) {
       console.error("[HostRuntime] Failed to persist host registry", error);
     }
