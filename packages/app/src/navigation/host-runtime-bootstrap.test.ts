@@ -200,6 +200,7 @@ describe("resolveStartupRoute", () => {
     hosts: [],
     anyOnlineHostServerId: null,
     workspaceSelection: null,
+    workspaceSelectionStatus: "unknown" as const,
     isWorkspaceSelectionLoaded: true,
     hasGivenUpWaitingForHost: false,
   };
@@ -255,8 +256,20 @@ describe("resolveStartupRoute", () => {
         ...baseIndexInput,
         hosts: [{ serverId: "server-1" }],
         workspaceSelection: { serverId: "server-1", workspaceId: "workspace-a" },
+        workspaceSelectionStatus: "exists",
       }),
     ).toEqual({ kind: "redirect", href: "/h/server-1/workspace/workspace-a" });
+  });
+
+  it("does not restore a saved workspace after workspace hydration proves it is missing", () => {
+    expect(
+      resolveStartupRoute({
+        ...baseIndexInput,
+        hosts: [{ serverId: "server-1" }],
+        workspaceSelection: { serverId: "server-1", workspaceId: "workspace-a" },
+        workspaceSelectionStatus: "missing",
+      }),
+    ).toEqual({ kind: "redirect", href: "/h/server-1" });
   });
 
   it("falls back to a saved host when the restored workspace host is no longer saved", () => {
@@ -325,14 +338,14 @@ describe("resolveStartupRoute", () => {
     ).toEqual({ kind: "render" });
   });
 
-  it("sends removed host routes to a saved host instead of welcome", () => {
+  it("sends removed host routes to global project selection instead of welcome", () => {
     expect(
       resolveStartupRoute({
         ...baseHostInput,
         route: { kind: "host", serverId: "server-removed" },
         hosts: [{ serverId: "server-next" }],
       }),
-    ).toEqual({ kind: "redirect", href: "/h/server-next/open-project" });
+    ).toEqual({ kind: "redirect", href: "/open-project" });
   });
 
   it("shows welcome from a host route only after the registry proves no hosts exist", () => {

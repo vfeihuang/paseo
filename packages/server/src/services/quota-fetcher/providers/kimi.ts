@@ -24,6 +24,7 @@ const KimiAuthSchema = z.object({
 interface KimiQuotaProviderOptions {
   logger: Logger;
   fetch?: ProviderApiFetch;
+  homeDir?: string;
 }
 
 export class KimiQuotaProvider implements ProviderUsageFetcher {
@@ -32,10 +33,12 @@ export class KimiQuotaProvider implements ProviderUsageFetcher {
 
   private readonly logger: Logger;
   private readonly fetchApi: ProviderApiFetch;
+  private readonly homeDir?: string;
 
   constructor(options: KimiQuotaProviderOptions) {
     this.logger = options.logger;
     this.fetchApi = options.fetch ?? fetch;
+    this.homeDir = options.homeDir;
   }
 
   async fetchUsage(): Promise<ProviderUsage> {
@@ -88,13 +91,25 @@ export class KimiQuotaProvider implements ProviderUsageFetcher {
   }
 
   private async readKimiToken(): Promise<string | null> {
-    const path = join(homedir(), ".kimi", "credentials", "kimi-code.json");
-    if (!existsSync(path)) return null;
-    try {
-      const credentials = KimiAuthSchema.parse(JSON.parse(await fs.readFile(path, "utf8")));
-      return credentials.access_token ?? null;
-    } catch {
-      return null;
+    const homeDir = this.homeDir ?? homedir();
+    const paths = [
+      join(
+        process.env["KIMI_CODE_HOME"] || join(homeDir, ".kimi-code"),
+        "credentials",
+        "kimi-code.json",
+      ),
+      join(homeDir, ".kimi", "credentials", "kimi-code.json"),
+    ];
+
+    for (const path of paths) {
+      if (!existsSync(path)) continue;
+      try {
+        const credentials = KimiAuthSchema.parse(JSON.parse(await fs.readFile(path, "utf8")));
+        if (credentials.access_token) return credentials.access_token;
+      } catch {
+        continue;
+      }
     }
+    return null;
   }
 }

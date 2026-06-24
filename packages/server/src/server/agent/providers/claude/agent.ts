@@ -13,7 +13,6 @@ import {
   type Query,
   type SDKMessage,
   type SDKPartialAssistantMessage,
-  type SDKTaskProgressMessage,
   type SDKResultMessage,
   type SDKSystemMessage,
   type SDKUserMessage,
@@ -36,10 +35,8 @@ import { buildClaudeFeatures, claudeModelSupportsFastMode } from "./feature-defi
 import {
   buildBinaryDiagnosticRows,
   buildCommandResolutionDiagnosticRows,
-  formatDiagnosticStatus,
   formatProviderDiagnostic,
   formatProviderDiagnosticError,
-  toDiagnosticErrorMessage,
 } from "../diagnostic-utils.js";
 import { appendOrReplaceGrowingAssistantMessage, runProviderTurn } from "../provider-runner.js";
 import { renderPromptAttachmentAsText } from "../../prompt-attachments.js";
@@ -59,7 +56,6 @@ import {
   type AgentLaunchContext,
   type AgentMetadata,
   type AgentMode,
-  type AgentModelDefinition,
   type AgentPermissionRequest,
   type AgentPermissionRequestKind,
   type AgentPermissionResponse,
@@ -76,12 +72,13 @@ import {
   type AgentTimelineItem,
   type AgentUsage,
   type AgentRuntimeInfo,
+  type FetchCatalogOptions,
   type ImportableProviderSession,
   type ImportProviderSessionContext,
   type ImportProviderSessionInput,
   type ListImportableSessionsOptions,
-  type ListModelsOptions,
   type McpServerConfig,
+  type ProviderCatalog,
 } from "../../agent-sdk-types.js";
 import { importSessionFromPersistence } from "../../provider-session-import.js";
 import {
@@ -1421,9 +1418,10 @@ export class ClaudeAgentClient implements AgentClient {
     });
   }
 
-  async listModels(_options: ListModelsOptions): Promise<AgentModelDefinition[]> {
+  async fetchCatalog(_options: FetchCatalogOptions): Promise<ProviderCatalog> {
     // Claude exposes a global catalog here; cwd/force are intentionally irrelevant.
-    return await getClaudeModelsWithSettings(this.logger, this.configDir);
+    const models = await getClaudeModelsWithSettings(this.logger, this.configDir);
+    return { models, modes: DEFAULT_MODES };
   }
 
   async listFeatures(config: AgentSessionConfig): Promise<AgentFeature[]> {
@@ -1477,28 +1475,9 @@ export class ClaudeAgentClient implements AgentClient {
         defaultBinary: "claude",
       });
       const availability = await checkProviderLaunchAvailable(launch);
-      const available = availability.available;
-      const auth = available
+      const auth = availability.available
         ? await resolveClaudeAuth(launch, availability, this.runtimeSettings)
         : null;
-      let modelsValue = "Not checked";
-      let status = formatDiagnosticStatus(available);
-
-      if (available) {
-        try {
-          const models = await this.listModels({
-            cwd: os.homedir(),
-            force: false,
-          });
-          modelsValue = String(models.length);
-        } catch (error) {
-          modelsValue = `Error - ${toDiagnosticErrorMessage(error)}`;
-          status = formatDiagnosticStatus(available, {
-            source: "model fetch",
-            cause: error,
-          });
-        }
-      }
 
       return {
         diagnostic: formatProviderDiagnostic("Claude Code", [
@@ -1507,8 +1486,6 @@ export class ClaudeAgentClient implements AgentClient {
           })),
           ...(await buildBinaryDiagnosticRows(launch, availability)),
           ...(auth ? [{ label: "Auth", value: auth }] : []),
-          { label: "Models", value: modelsValue },
-          { label: "Status", value: status },
         ]),
       };
     } catch (error) {
@@ -1603,25 +1580,21 @@ function extractContextWindowSize(modelUsage: unknown): number | undefined {
   return maxContextWindow;
 }
 
-function readUsageTotalTokens(usage: unknown): number | undefined {
-  if (!usage || typeof usage !== "object") {
+function resolveInitialContextWindowSize(modelId: string | null | undefined): number | undefined {
+  const normalized = typeof modelId === "string" ? modelId.trim().toLowerCase() : "";
+  if (!normalized) {
     return undefined;
   }
-  const totalTokens = (usage as { total_tokens?: unknown }).total_tokens;
-  if (typeof totalTokens !== "number" || !Number.isFinite(totalTokens) || totalTokens < 0) {
-    return undefined;
+  if (normalized.includes("[1m]") || normalized.includes("context-1m")) {
+    return 1_000_000;
   }
-  return totalTokens;
-}
-
-function readContextWindowUsedTokensFromTaskProgress(
-  message: SDKTaskProgressMessage,
-): number | undefined {
-  return readUsageTotalTokens(message.usage);
-}
-
-function readUsageFromTaskNotification(message: { usage?: unknown }): number | undefined {
-  return readUsageTotalTokens(message.usage);
+  if (normalized.includes("claude-fable-5")) {
+    return 1_000_000;
+  }
+  if (/(?:^|[~/_-])(?:claude[-_ ]*)?(opus|sonnet|haiku)(?:$|[-_ ./])/.test(normalized)) {
+    return 200_000;
+  }
+  return undefined;
 }
 
 function readStreamRequestInputTokens(event: Record<string, unknown>): number | undefined {
@@ -1656,6 +1629,197 @@ function readStreamRequestOutputTokens(event: Record<string, unknown>): number |
     return undefined;
   }
   return outputTokens;
+}
+
+function readLastUsageIteration(usage: unknown): Record<string, unknown> | undefined {
+  const iterations = toObjectRecord(usage)?.iterations;
+  if (!Array.isArray(iterations)) {
+    return undefined;
+  }
+  for (let index = iterations.length - 1; index >= 0; index -= 1) {
+    const candidate = toObjectRecord(iterations[index]);
+    if (candidate) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+function readUsageTokenTotal(usage: Record<string, unknown>): number | undefined {
+  const usageWithCacheCreation = usage as typeof usage & {
+    cache_creation_input_tokens?: unknown;
+  };
+  const inputTokens =
+    typeof usage.input_tokens === "number" && Number.isFinite(usage.input_tokens)
+      ? usage.input_tokens
+      : 0;
+  const cacheCreationInputTokens =
+    typeof usageWithCacheCreation.cache_creation_input_tokens === "number" &&
+    Number.isFinite(usageWithCacheCreation.cache_creation_input_tokens)
+      ? usageWithCacheCreation.cache_creation_input_tokens
+      : 0;
+  const cacheReadInputTokens =
+    typeof usage.cache_read_input_tokens === "number" &&
+    Number.isFinite(usage.cache_read_input_tokens)
+      ? usage.cache_read_input_tokens
+      : 0;
+  const outputTokens =
+    typeof usage.output_tokens === "number" && Number.isFinite(usage.output_tokens)
+      ? usage.output_tokens
+      : 0;
+  const total = inputTokens + cacheCreationInputTokens + cacheReadInputTokens + outputTokens;
+  return total > 0 ? total : undefined;
+}
+
+function readActiveUsageTokens(usage: unknown): number | undefined {
+  const activeUsage = readLastUsageIteration(usage);
+  return activeUsage ? readUsageTokenTotal(activeUsage) : undefined;
+}
+
+function readLegacyResultUsageTokens(usage: unknown): number | undefined {
+  const usageRecord = toObjectRecord(usage);
+  return usageRecord ? readUsageTokenTotal(usageRecord) : undefined;
+}
+
+function isClaudeSubagentToolName(name: string | undefined): boolean {
+  return name === "Task" || name === "Agent";
+}
+
+class ClaudeContextUsageState {
+  private contextWindowMaxTokens: number | undefined;
+  private streamRequestInputTokens: number | undefined;
+  private streamRequestOutputTokens: number | undefined;
+  private compactedContextWindowUsedTokens: number | undefined;
+  private completedResultTurns = 0;
+
+  constructor(initialContextWindowMaxTokens?: number) {
+    this.contextWindowMaxTokens = initialContextWindowMaxTokens;
+  }
+
+  beginTurn(): void {
+    this.streamRequestInputTokens = undefined;
+    this.streamRequestOutputTokens = undefined;
+    this.compactedContextWindowUsedTokens = undefined;
+  }
+
+  setInitialContextWindowMaxTokens(contextWindowMaxTokens: number | undefined): void {
+    this.contextWindowMaxTokens = contextWindowMaxTokens;
+  }
+
+  recordModelUsage(modelUsage: unknown): number | undefined {
+    const contextWindowMaxTokens = extractContextWindowSize(modelUsage);
+    if (contextWindowMaxTokens !== undefined) {
+      this.contextWindowMaxTokens = contextWindowMaxTokens;
+    }
+    return this.contextWindowMaxTokens;
+  }
+
+  buildStreamUsageEvent(event: unknown): AgentStreamEvent | null {
+    const streamEvent = toObjectRecord(event);
+    if (!streamEvent) {
+      return null;
+    }
+    const eventType = readTrimmedString(streamEvent.type);
+    if (eventType === "message_start") {
+      const inputTokens = readStreamRequestInputTokens(streamEvent);
+      if (typeof inputTokens !== "number") {
+        return null;
+      }
+      this.streamRequestInputTokens = inputTokens;
+      this.streamRequestOutputTokens = 0;
+    } else if (eventType === "message_delta") {
+      const outputTokens = readStreamRequestOutputTokens(streamEvent);
+      if (typeof outputTokens !== "number") {
+        return null;
+      }
+      this.streamRequestOutputTokens = outputTokens;
+    } else {
+      return null;
+    }
+
+    const usedTokens = this.streamUsedTokens();
+    if (usedTokens === undefined) {
+      return null;
+    }
+    return this.createUsageUpdatedEvent(usedTokens);
+  }
+
+  buildResultUsage(message: SDKResultMessage, modelUsage: unknown): AgentUsage | undefined {
+    try {
+      if (!message.usage) {
+        return undefined;
+      }
+      const usage: AgentUsage = {
+        inputTokens: message.usage.input_tokens,
+        cachedInputTokens: message.usage.cache_read_input_tokens,
+        outputTokens: message.usage.output_tokens,
+        totalCostUsd: message.total_cost_usd,
+      };
+
+      const modelContextWindowMaxTokens = this.recordModelUsage(modelUsage ?? message.modelUsage);
+      if (this.contextWindowMaxTokens !== undefined) {
+        usage.contextWindowMaxTokens = this.contextWindowMaxTokens;
+      } else if (modelContextWindowMaxTokens !== undefined) {
+        usage.contextWindowMaxTokens = modelContextWindowMaxTokens;
+      }
+
+      const activeResultUsageTokens =
+        readActiveUsageTokens(message.usage) ??
+        (this.completedResultTurns === 0 ? readLegacyResultUsageTokens(message.usage) : undefined);
+      const usedTokens =
+        this.streamUsedTokens() ?? activeResultUsageTokens ?? this.compactedContextWindowUsedTokens;
+      if (usedTokens !== undefined) {
+        usage.contextWindowUsedTokens = usedTokens;
+      }
+      return usage;
+    } finally {
+      this.compactedContextWindowUsedTokens = undefined;
+      this.completedResultTurns += 1;
+    }
+  }
+
+  private streamUsedTokens(): number | undefined {
+    if (
+      typeof this.streamRequestInputTokens !== "number" ||
+      typeof this.streamRequestOutputTokens !== "number"
+    ) {
+      return undefined;
+    }
+    const usedTokens = this.streamRequestInputTokens + this.streamRequestOutputTokens;
+    return usedTokens > 0 ? usedTokens : undefined;
+  }
+
+  private createUsageUpdatedEvent(contextWindowUsedTokens: number): AgentStreamEvent {
+    const usage: AgentUsage = {
+      contextWindowUsedTokens,
+    };
+    if (this.contextWindowMaxTokens !== undefined) {
+      usage.contextWindowMaxTokens = this.contextWindowMaxTokens;
+    }
+    return {
+      type: "usage_updated",
+      provider: "claude",
+      usage,
+    };
+  }
+
+  buildCompactionUsageEvent(postTokens: number | undefined): AgentStreamEvent {
+    this.streamRequestInputTokens = undefined;
+    this.streamRequestOutputTokens = undefined;
+    this.compactedContextWindowUsedTokens = postTokens;
+    const usage: AgentUsage = {};
+    if (this.contextWindowMaxTokens !== undefined) {
+      usage.contextWindowMaxTokens = this.contextWindowMaxTokens;
+    }
+    if (postTokens !== undefined) {
+      usage.contextWindowUsedTokens = postTokens;
+    }
+    return {
+      type: "usage_updated",
+      provider: "claude",
+      usage,
+    };
+  }
 }
 
 class ClaudeAgentSession implements AgentSession {
@@ -1703,10 +1867,7 @@ class ClaudeAgentSession implements AgentSession {
   private pendingInterruptAbort = false;
   private foregroundHasVisibleActivity = false;
   private activeTurnHasAssistantText = false;
-  private lastContextWindowUsedTokens: number | undefined;
-  private lastContextWindowMaxTokens: number | undefined;
-  private lastStreamRequestInputTokens: number | undefined;
-  private lastStreamRequestOutputTokens: number | undefined;
+  private readonly contextUsage: ClaudeContextUsageState;
   private userMessageIds: string[] = [];
   private readonly emittedUserMessageIds = new Set<string>();
   private readonly rewindTurnAnchors: ClaudeRewindTurnAnchor[] = [];
@@ -1724,6 +1885,9 @@ class ClaudeAgentSession implements AgentSession {
     this.logger = options.logger.child({ agentId: this.agentId });
     this.queryFactory = options.queryFactory;
     this.resolveBinary = options.resolveBinary;
+    this.contextUsage = new ClaudeContextUsageState(
+      resolveInitialContextWindowSize(this.config.model),
+    );
     const handle = options.handle;
 
     if (handle) {
@@ -1840,6 +2004,7 @@ class ClaudeAgentSession implements AgentSession {
     this.activeForegroundTurnId = turnId;
     this.foregroundHasVisibleActivity = false;
     this.activeTurnHasAssistantText = false;
+    this.contextUsage.beginTurn();
     this.transitionTurnState("foreground", "foreground turn started");
     this.clearRecentStderr();
 
@@ -1966,6 +2131,9 @@ class ClaudeAgentSession implements AgentSession {
     if (!claudeModelSupportsFastMode(this.config.model) && this.config.featureValues?.fast_mode) {
       await this.applyFastModeFeature(false, activeQuery);
     }
+    this.contextUsage.setInitialContextWindowMaxTokens(
+      resolveInitialContextWindowSize(this.config.model),
+    );
     this.lastOptionsModel = normalizedModelId ?? this.lastOptionsModel;
     this.lastRuntimeModel = null;
     this.cachedRuntimeInfo = null;
@@ -3005,6 +3173,7 @@ class ClaudeAgentSession implements AgentSession {
       id: this.createTurnId("autonomous"),
     };
     this.activeTurnHasAssistantText = false;
+    this.contextUsage.beginTurn();
     this.notifySubscribers({ type: "turn_started", provider: "claude" });
     this.syncTurnState("autonomous turn started");
   }
@@ -3098,7 +3267,7 @@ class ClaudeAgentSession implements AgentSession {
       if (await this.handleMissingResumedConversation(message, activeQuery)) {
         return true;
       }
-      this.routeSdkMessageFromPump(message);
+      await this.routeSdkMessageFromPump(message);
       return false;
     };
     const drainActiveQuery = async (): Promise<boolean> => {
@@ -3174,7 +3343,7 @@ class ClaudeAgentSession implements AgentSession {
     );
   }
 
-  private routeSdkMessageFromPump(message: SDKMessage): void {
+  private async routeSdkMessageFromPump(message: SDKMessage): Promise<void> {
     if (this.shouldSuppressStaleResult(message)) {
       return;
     }
@@ -3204,26 +3373,7 @@ class ClaudeAgentSession implements AgentSession {
       "provider.claude.parsed_event",
     );
 
-    const messageEvents = this.translateMessageToEvents(message, {
-      suppressAssistantText: true,
-      suppressReasoning: true,
-    });
-    const assistantTimelineEvents = this.timelineAssembler
-      .consume({
-        message,
-        runId: turnId,
-        messageIdHint: identifiers.messageId,
-      })
-      .map(
-        (item) =>
-          ({
-            type: "timeline",
-            item,
-            provider: "claude",
-          }) satisfies AgentStreamEvent,
-      );
-
-    const events = [...messageEvents, ...assistantTimelineEvents];
+    const events = await this.buildPumpedMessageEvents(message, identifiers.messageId, turnId);
 
     if (events.length === 0) {
       return;
@@ -3256,6 +3406,33 @@ class ClaudeAgentSession implements AgentSession {
     }
 
     this.dispatchEvents(events);
+  }
+
+  private async buildPumpedMessageEvents(
+    message: SDKMessage,
+    messageIdHint: string | null,
+    turnId: string | null,
+  ): Promise<AgentStreamEvent[]> {
+    const messageEvents = this.translateMessageToEvents(message, {
+      suppressAssistantText: true,
+      suppressReasoning: true,
+    });
+    const assistantTimelineEvents = this.timelineAssembler
+      .consume({
+        message,
+        runId: turnId,
+        messageIdHint,
+      })
+      .map(
+        (item) =>
+          ({
+            type: "timeline",
+            item,
+            provider: "claude",
+          }) satisfies AgentStreamEvent,
+      );
+
+    return [...messageEvents, ...assistantTimelineEvents];
   }
 
   private async handleMissingResumedConversation(
@@ -3449,6 +3626,7 @@ class ClaudeAgentSession implements AgentSession {
         },
         provider: "claude",
       });
+      events.push(this.contextUsage.buildCompactionUsageEvent(compactMetadata?.postTokens));
       return;
     }
     if (message.subtype === "task_notification") {
@@ -3456,11 +3634,7 @@ class ClaudeAgentSession implements AgentSession {
       return;
     }
     if (message.subtype === "task_progress") {
-      this.lastContextWindowUsedTokens =
-        readContextWindowUsedTokensFromTaskProgress(message) ?? this.lastContextWindowUsedTokens;
-      if (typeof this.lastContextWindowUsedTokens === "number") {
-        events.push(this.createUsageUpdatedEvent(this.lastContextWindowUsedTokens));
-      }
+      return;
     }
   }
 
@@ -3470,12 +3644,12 @@ class ClaudeAgentSession implements AgentSession {
   ): void {
     // TODO: subagent timelines are best-effort. Subagent task_notifications
     // arrive without parent_tool_use_id but with tool_use_id pointing at the
-    // parent's Task call, so they slip past the sidechain router and pollute
+    // the parent's subagent tool call, so they slip past the sidechain router and pollute
     // the parent timeline. Drop them here; eventually thread them into the
-    // parent Task tool call's sub_agent log instead.
+    // parent tool call's sub_agent log instead.
     const taskUseId = message.tool_use_id;
     const cachedTool = taskUseId ? this.toolUseCache.get(taskUseId) : undefined;
-    if (cachedTool?.name === "Task") {
+    if (isClaudeSubagentToolName(cachedTool?.name)) {
       return;
     }
     const taskNotificationItem = mapTaskNotificationSystemRecordToToolCall(message);
@@ -3485,11 +3659,6 @@ class ClaudeAgentSession implements AgentSession {
         item: taskNotificationItem,
         provider: "claude",
       });
-    }
-    const usage = readUsageFromTaskNotification(message);
-    if (typeof usage === "number") {
-      this.lastContextWindowUsedTokens = usage;
-      events.push(this.createUsageUpdatedEvent(usage));
     }
   }
 
@@ -3569,7 +3738,7 @@ class ClaudeAgentSession implements AgentSession {
     events: AgentStreamEvent[],
     options: { suppressAssistantText?: boolean; suppressReasoning?: boolean } | undefined,
   ): void {
-    const usageUpdatedEvent = this.trackStreamEventUsage(message.event);
+    const usageUpdatedEvent = this.contextUsage.buildStreamUsageEvent(message.event);
     if (usageUpdatedEvent) {
       events.push(usageUpdatedEvent);
     }
@@ -3754,98 +3923,7 @@ class ClaudeAgentSession implements AgentSession {
   }
 
   private convertUsage(message: SDKResultMessage, modelUsage?: unknown): AgentUsage | undefined {
-    if (!message.usage) {
-      return undefined;
-    }
-    const usage: AgentUsage = {
-      inputTokens: message.usage.input_tokens,
-      cachedInputTokens: message.usage.cache_read_input_tokens,
-      outputTokens: message.usage.output_tokens,
-      totalCostUsd: message.total_cost_usd,
-    };
-    const contextWindowMaxTokens = extractContextWindowSize(modelUsage ?? message.modelUsage);
-    if (contextWindowMaxTokens !== undefined) {
-      this.lastContextWindowMaxTokens = contextWindowMaxTokens;
-      usage.contextWindowMaxTokens = contextWindowMaxTokens;
-    } else if (this.lastContextWindowMaxTokens !== undefined) {
-      usage.contextWindowMaxTokens = this.lastContextWindowMaxTokens;
-    }
-    if (typeof this.lastContextWindowUsedTokens === "number") {
-      // task_progress.total_tokens is the accurate context window fill level.
-      // Prefer it over result.usage which contains accumulated session totals.
-      usage.contextWindowUsedTokens = this.lastContextWindowUsedTokens;
-    } else if (
-      typeof this.lastStreamRequestInputTokens === "number" &&
-      typeof this.lastStreamRequestOutputTokens === "number"
-    ) {
-      usage.contextWindowUsedTokens =
-        this.lastStreamRequestInputTokens + this.lastStreamRequestOutputTokens;
-    } else if (message.usage) {
-      // Fallback: derive from result.usage when no task_progress has been
-      // received yet. These values are accumulated across all API calls, but
-      // for the first turn they equal the per-call values so the estimate is
-      // reasonable. Once a task_progress arrives it takes over permanently.
-      const usageWithCacheCreation = message.usage as typeof message.usage & {
-        cache_creation_input_tokens?: number;
-      };
-      const derived =
-        (message.usage.input_tokens ?? 0) +
-        (usageWithCacheCreation.cache_creation_input_tokens ?? 0) +
-        (message.usage.cache_read_input_tokens ?? 0) +
-        (message.usage.output_tokens ?? 0);
-      if (Number.isFinite(derived) && derived > 0) {
-        usage.contextWindowUsedTokens = derived;
-      }
-    }
-    return usage;
-  }
-
-  private createUsageUpdatedEvent(contextWindowUsedTokens: number): AgentStreamEvent {
-    const usage: AgentUsage = {
-      contextWindowUsedTokens,
-    };
-    if (this.lastContextWindowMaxTokens !== undefined) {
-      usage.contextWindowMaxTokens = this.lastContextWindowMaxTokens;
-    }
-    return {
-      type: "usage_updated",
-      provider: "claude",
-      usage,
-    };
-  }
-
-  private trackStreamEventUsage(event: unknown): AgentStreamEvent | null {
-    const streamEvent = toObjectRecord(event);
-    if (!streamEvent) {
-      return null;
-    }
-    const eventType = readTrimmedString(streamEvent.type);
-    if (eventType === "message_start") {
-      const inputTokens = readStreamRequestInputTokens(streamEvent);
-      if (typeof inputTokens !== "number") {
-        return null;
-      }
-      this.lastStreamRequestInputTokens = inputTokens;
-      this.lastStreamRequestOutputTokens = 0;
-    } else if (eventType === "message_delta") {
-      const outputTokens = readStreamRequestOutputTokens(streamEvent);
-      if (typeof outputTokens !== "number") {
-        return null;
-      }
-      this.lastStreamRequestOutputTokens = outputTokens;
-    } else {
-      return null;
-    }
-
-    if (
-      typeof this.lastStreamRequestInputTokens !== "number" ||
-      typeof this.lastStreamRequestOutputTokens !== "number"
-    ) {
-      return null;
-    }
-    return this.createUsageUpdatedEvent(
-      this.lastStreamRequestInputTokens + this.lastStreamRequestOutputTokens,
-    );
+    return this.contextUsage.buildResultUsage(message, modelUsage);
   }
 
   private handlePermissionRequest: CanUseTool = async (
@@ -4746,7 +4824,9 @@ function hasToolLikeBlock(block?: ClaudeContentChunk | null): boolean {
   return type.includes("tool");
 }
 
-function readCompactionMetadata(source: unknown): { trigger?: string; preTokens?: number } | null {
+function readCompactionMetadata(
+  source: unknown,
+): { trigger?: string; preTokens?: number; postTokens?: number } | null {
   const sourceRecord = toObjectRecord(source);
   if (!sourceRecord) {
     return null;
@@ -4764,7 +4844,9 @@ function readCompactionMetadata(source: unknown): { trigger?: string; preTokens?
     const trigger = typeof metadata.trigger === "string" ? metadata.trigger : undefined;
     const preTokensRaw = metadata.preTokens ?? metadata.pre_tokens;
     const preTokens = typeof preTokensRaw === "number" ? preTokensRaw : undefined;
-    return { trigger, preTokens };
+    const postTokensRaw = metadata.postTokens ?? metadata.post_tokens;
+    const postTokens = typeof postTokensRaw === "number" ? postTokensRaw : undefined;
+    return { trigger, preTokens, postTokens };
   }
   return null;
 }

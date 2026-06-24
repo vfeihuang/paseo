@@ -16,6 +16,7 @@ import type {
 } from "./agent-sdk-types.js";
 import type { ManagedAgent } from "./agent-manager.js";
 import type { WorkspaceGitService } from "../workspace-git-service.js";
+import type { ManagedProcessRegistry } from "../managed-processes/managed-processes.js";
 import type {
   AgentProviderRuntimeSettingsMap,
   ProviderOverride,
@@ -26,6 +27,7 @@ import {
   type ProviderDefinition,
 } from "./provider-registry.js";
 import { applyMutableProviderConfigToOverrides } from "../daemon-config-store.js";
+import { formatProviderDiagnostic } from "./providers/diagnostic-utils.js";
 import type { MutableDaemonConfig } from "../daemon-config-store.js";
 
 const DEFAULT_REFRESH_TIMEOUT_MS = 30_000;
@@ -56,6 +58,7 @@ export interface ProviderSnapshotManagerOptions {
   runtimeSettings?: AgentProviderRuntimeSettingsMap;
   providerOverrides?: Record<string, ProviderOverride>;
   workspaceGitService?: Pick<WorkspaceGitService, "resolveRepoRoot">;
+  managedProcesses?: ManagedProcessRegistry;
   isDev?: boolean;
   extraClients?: Partial<Record<AgentProvider, AgentClient>>;
   refreshTimeoutMs?: number;
@@ -127,6 +130,7 @@ export class ProviderSnapshotManager {
   private readonly refreshTimeoutMs: number;
   private readonly logger: Logger;
   private readonly workspaceGitService?: Pick<WorkspaceGitService, "resolveRepoRoot">;
+  private readonly managedProcesses?: ManagedProcessRegistry;
   private readonly isDev: boolean;
   private readonly extraClients: Partial<Record<AgentProvider, AgentClient>>;
   private runtimeSettings: AgentProviderRuntimeSettingsMap | undefined;
@@ -138,6 +142,7 @@ export class ProviderSnapshotManager {
   constructor(options: ProviderSnapshotManagerOptions) {
     this.logger = options.logger;
     this.workspaceGitService = options.workspaceGitService;
+    this.managedProcesses = options.managedProcesses;
     this.isDev = options.isDev === true;
     this.extraClients = options.extraClients ?? {};
     this.runtimeSettings = options.runtimeSettings;
@@ -308,13 +313,23 @@ export class ProviderSnapshotManager {
   }
 
   async getProviderDiagnostic(provider: AgentProvider): Promise<ProviderDiagnosticResult> {
-    const client = this.providerClients[provider];
-    if (!client) {
-      throw new Error(`Provider ${provider} is not configured`);
-    }
-    const diagnostic = client.getDiagnostic
+    const definition = this.requireProvider(provider);
+    const client = this.ensureClient(provider, definition);
+
+    // Force-refresh the snapshot so Models/Status come from the single catalog authority.
+    await this.refreshSnapshotForCwd({ cwd: homedir(), providers: [provider] });
+    const entry = await this.getProvider({ cwd: homedir(), provider, wait: true });
+
+    const modelCount = entry.status === "ready" ? String(entry.models?.length ?? 0) : "—";
+    const status = formatProviderStatus(entry);
+
+    const baseDiagnostic = client.getDiagnostic
       ? (await client.getDiagnostic()).diagnostic
-      : "No diagnostic available for this provider.";
+      : formatProviderDiagnostic(definition.label ?? provider, [
+          { label: "Diagnostic", value: "No diagnostic available" },
+        ]);
+
+    const diagnostic = `${baseDiagnostic}\n  Models: ${modelCount}\n  Status: ${status}`;
     return { provider, diagnostic };
   }
 
@@ -370,6 +385,7 @@ export class ProviderSnapshotManager {
       runtimeSettings: this.runtimeSettings,
       providerOverrides: this.providerOverrides,
       workspaceGitService: this.workspaceGitService,
+      managedProcesses: this.managedProcesses,
       isDev: this.isDev,
     });
 
@@ -385,8 +401,7 @@ export class ProviderSnapshotManager {
           client.resolveCreateConfig?.bind(client) ?? definition.resolveCreateConfig,
         isCreateConfigUnattended:
           client.isCreateConfigUnattended?.bind(client) ?? definition.isCreateConfigUnattended,
-        fetchModels: client.listModels.bind(client),
-        fetchModes: client.listModes?.bind(client) ?? definition.fetchModes,
+        fetchCatalog: client.fetchCatalog.bind(client),
       };
     }
 
@@ -639,11 +654,8 @@ export class ProviderSnapshotManager {
         return;
       }
 
-      const [models, modes] = await withTimeout(
-        Promise.all([
-          definition.fetchModels({ cwd, force }),
-          definition.fetchModes({ cwd, force }),
-        ]),
+      const catalog = await withTimeout(
+        definition.fetchCatalog({ cwd, force }, client),
         this.refreshTimeoutMs,
         `Timed out refreshing ${definition.label} after ${this.refreshTimeoutMs}ms`,
       );
@@ -652,8 +664,8 @@ export class ProviderSnapshotManager {
         ...base,
         status: "ready",
         enabled: true,
-        models,
-        modes,
+        models: catalog.models,
+        modes: catalog.modes,
         fetchedAt: new Date().toISOString(),
       });
     } catch (error) {
@@ -800,4 +812,11 @@ function toErrorMessage(error: unknown): string {
     return error;
   }
   return "Unknown error";
+}
+
+function formatProviderStatus(entry: ProviderSnapshotEntry): string {
+  if (entry.status === "ready") return "Ready";
+  if (entry.status === "error") return `Error: ${entry.error ?? "Unknown error"}`;
+  if (entry.status === "unavailable") return "Unavailable";
+  return "Loading";
 }

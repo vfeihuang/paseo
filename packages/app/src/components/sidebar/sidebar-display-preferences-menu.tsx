@@ -5,14 +5,16 @@ import { Settings2 } from "lucide-react-native";
 import type { Theme } from "@/styles/theme";
 import {
   DropdownMenu,
-  DropdownMenuTrigger,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useSidebarViewStore, type SidebarGroupMode } from "@/stores/sidebar-view-store";
-import { useHosts, useHostRuntimeSnapshot } from "@/runtime/host-runtime";
-import { formatConnectionStatus } from "@/utils/daemons";
 import { isWeb as platformIsWeb } from "@/constants/platform";
+import { useAppSettings, type WorkspaceTitleSource } from "@/hooks/use-settings";
+import { useHosts, useHostRuntimeSnapshot } from "@/runtime/host-runtime";
+import { useSidebarViewStore, type SidebarGroupMode } from "@/stores/sidebar-view-store";
+import { formatConnectionStatus } from "@/utils/daemons";
 
 const ThemedSettings2 = withUnistyles(Settings2);
 const filterColorMapping = (theme: Theme) => ({ color: theme.colors.foregroundMuted });
@@ -22,12 +24,26 @@ const GROUP_MODE_ITEMS: Array<{ value: SidebarGroupMode; label: string }> = [
   { value: "status", label: "Status" },
 ];
 
-export function SidebarGroupingSelector() {
+const WORKSPACE_TITLE_SOURCE_ITEMS: Array<{ value: WorkspaceTitleSource; label: string }> = [
+  { value: "title", label: "Title" },
+  { value: "branch", label: "Branch name" },
+];
+
+interface DisplayPreferenceOption<Value extends string> {
+  value: Value;
+  label: string;
+}
+
+export function SidebarDisplayPreferencesMenu() {
   const groupMode = useSidebarViewStore((state) => state.groupMode);
   const hostFilter = useSidebarViewStore((state) => state.hostFilter);
   const setGroupMode = useSidebarViewStore((state) => state.setGroupMode);
   const setHostFilter = useSidebarViewStore((state) => state.setHostFilter);
   const hosts = useHosts();
+  const {
+    settings: { workspaceTitleSource },
+    updateSettings,
+  } = useAppSettings();
 
   const handleSelectMode = useCallback(
     (mode: SidebarGroupMode) => {
@@ -41,6 +57,13 @@ export function SidebarGroupingSelector() {
       setHostFilter(serverId);
     },
     [setHostFilter],
+  );
+
+  const handleWorkspaceTitleSourceSelect = useCallback(
+    (source: WorkspaceTitleSource) => {
+      void updateSettings({ workspaceTitleSource: source });
+    },
+    [updateSettings],
   );
 
   const triggerStyle = useCallback(
@@ -58,26 +81,27 @@ export function SidebarGroupingSelector() {
       <DropdownMenuTrigger
         style={triggerStyle}
         accessibilityRole={platformIsWeb ? undefined : "button"}
-        accessibilityLabel="Sidebar grouping"
-        testID="sidebar-grouping-selector"
+        accessibilityLabel="Display preferences"
+        testID="sidebar-display-preferences-menu"
       >
         <ThemedSettings2 size={14} uniProps={filterColorMapping} />
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" width={200} testID="sidebar-grouping-menu">
+      <DropdownMenuContent align="end" width={220} testID="sidebar-display-preferences-content">
         <View style={styles.menuHeader}>
           <Text style={styles.menuHeaderLabel}>Group by</Text>
         </View>
         {GROUP_MODE_ITEMS.map((item) => (
-          <GroupModeMenuItem
+          <DisplayPreferenceMenuItem
             key={item.value}
             item={item}
             isSelected={groupMode === item.value}
+            testIDPrefix="sidebar-grouping"
             onSelect={handleSelectMode}
           />
         ))}
-        {showHostFilter && (
+        {showHostFilter ? (
           <>
-            <View style={styles.separator} />
+            <DropdownMenuSeparator />
             <View style={styles.menuHeader}>
               <Text style={styles.menuHeaderLabel}>Filter</Text>
             </View>
@@ -98,29 +122,44 @@ export function SidebarGroupingSelector() {
               />
             ))}
           </>
-        )}
+        ) : null}
+        <DropdownMenuSeparator />
+        <View style={styles.menuHeader}>
+          <Text style={styles.menuHeaderLabel}>Workspace title</Text>
+        </View>
+        {WORKSPACE_TITLE_SOURCE_ITEMS.map((item) => (
+          <DisplayPreferenceMenuItem
+            key={item.value}
+            item={item}
+            isSelected={workspaceTitleSource === item.value}
+            testIDPrefix="sidebar-workspace-title-source"
+            onSelect={handleWorkspaceTitleSourceSelect}
+          />
+        ))}
       </DropdownMenuContent>
     </DropdownMenu>
   );
 }
 
-function GroupModeMenuItem({
+function DisplayPreferenceMenuItem<Value extends string>({
   item,
   isSelected,
+  testIDPrefix,
   onSelect,
 }: {
-  item: { value: SidebarGroupMode; label: string };
+  item: DisplayPreferenceOption<Value>;
   isSelected: boolean;
-  onSelect: (mode: SidebarGroupMode) => void;
+  testIDPrefix: string;
+  onSelect: (value: Value) => void;
 }) {
   const handleSelect = useCallback(() => onSelect(item.value), [item.value, onSelect]);
   return (
     <DropdownMenuItem
-      testID={`sidebar-grouping-${item.value}`}
+      testID={`${testIDPrefix}-${item.value}`}
       selected={isSelected}
       onSelect={handleSelect}
     >
-      {item.label}
+      <Text style={styles.optionLabel}>{item.label}</Text>
     </DropdownMenuItem>
   );
 }
@@ -172,10 +211,7 @@ const styles = StyleSheet.create((theme) => ({
     fontWeight: theme.fontWeight.medium,
     color: theme.colors.foregroundMuted,
   },
-  separator: {
-    height: 1,
-    backgroundColor: theme.colors.border,
-    marginVertical: theme.spacing[1],
-    marginHorizontal: theme.spacing[2],
+  optionLabel: {
+    fontSize: theme.fontSize.sm,
   },
 }));

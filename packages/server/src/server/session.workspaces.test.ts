@@ -491,8 +491,11 @@ class CreateAgentTestClient implements AgentClient {
     });
   }
 
-  async listModels() {
-    return [{ provider: this.provider, id: "gpt-test", label: "GPT Test", isDefault: true }];
+  async fetchCatalog() {
+    return {
+      models: [{ provider: this.provider, id: "gpt-test", label: "GPT Test", isDefault: true }],
+      modes: [],
+    };
   }
 
   async isAvailable(): Promise<boolean> {
@@ -543,6 +546,7 @@ function createSessionForWorkspaceTests(
         getAgent: () => null,
         archiveAgent: async () => ({ archivedAt: new Date().toISOString() }),
         archiveSnapshot: async () => ({}),
+        unarchiveSnapshot: async () => true,
         clearAgentAttention: async () => {},
         notifyAgentState: () => {},
       }),

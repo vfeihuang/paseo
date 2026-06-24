@@ -23,7 +23,7 @@ import { StyleSheet, useUnistyles } from "react-native-unistyles";
 import { TitlebarDragRegion } from "@/components/desktop/titlebar-drag-region";
 import { HostPicker } from "@/components/hosts/host-picker";
 import { SidebarHeaderRow } from "@/components/sidebar/sidebar-header-row";
-import { SidebarGroupingSelector } from "@/components/sidebar/sidebar-grouping-selector";
+import { SidebarDisplayPreferencesMenu } from "@/components/sidebar/sidebar-display-preferences-menu";
 import { Shortcut } from "@/components/ui/shortcut";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useIsCompactFormFactor } from "@/constants/layout";
@@ -148,7 +148,7 @@ export const LeftSidebar = memo(function LeftSidebar({
     placements: workspacePlacements,
   });
   const { collapsedProjectKeys, shortcutIndexByWorkspaceKey, toggleProjectCollapsed } =
-    useSidebarShortcutModel({ projects, isInitialLoad });
+    useSidebarShortcutModel({ projects });
 
   const groupMode = useSidebarViewStore((state) => state.groupMode);
 
@@ -964,7 +964,7 @@ function WorkspacesSectionHeader() {
         <Tooltip delayDuration={300}>
           <TooltipTrigger asChild>
             <View>
-              <SidebarGroupingSelector />
+              <SidebarDisplayPreferencesMenu />
             </View>
           </TooltipTrigger>
           <TooltipContent side="bottom" align="center" offset={8}>

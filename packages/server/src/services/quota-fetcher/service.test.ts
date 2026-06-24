@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -33,6 +33,20 @@ function writeCodexAuth(dir: string, accessToken: string, refreshToken = "rt_cod
   writeFileSync(
     join(dir, "auth.json"),
     JSON.stringify({ tokens: { access_token: accessToken, refresh_token: refreshToken } }),
+  );
+}
+
+function writeKimiCredentials(dir: string, accessToken: string): void {
+  mkdirSync(join(dir, "credentials"), { recursive: true });
+  writeFileSync(
+    join(dir, "credentials", "kimi-code.json"),
+    JSON.stringify({
+      access_token: accessToken,
+      refresh_token: "rt_kimi",
+      expires_at: 1_798_812_800,
+      scope: "kimi-code",
+      token_type: "Bearer",
+    }),
   );
 }
 
@@ -299,6 +313,7 @@ describe("real provider usage fetchers", () => {
       "GROK_TOKEN",
       "KIMI_TOKEN",
       "KIMI_API_KEY",
+      "KIMI_CODE_HOME",
       "CODEX_HOME",
     ]) {
       delete process.env[key];
@@ -320,7 +335,11 @@ describe("real provider usage fetchers", () => {
   });
 
   function service(
-    options: { platform?: typeof process.platform; keychain?: () => Promise<unknown | null> } = {},
+    options: {
+      platform?: typeof process.platform;
+      keychain?: () => Promise<unknown | null>;
+      kimiHomeDir?: string;
+    } = {},
   ) {
     const logger = createLogger();
     const fetchThroughTestDouble = ((url: RequestInfo | URL, init?: RequestInit) =>
@@ -341,7 +360,11 @@ describe("real provider usage fetchers", () => {
         new CursorQuotaProvider({ logger, fetch: fetchThroughTestDouble }),
         new ZaiQuotaProvider({ logger, fetch: fetchThroughTestDouble }),
         new GrokQuotaProvider({ logger, fetch: fetchThroughTestDouble }),
-        new KimiQuotaProvider({ logger, fetch: fetchThroughTestDouble }),
+        new KimiQuotaProvider({
+          logger,
+          fetch: fetchThroughTestDouble,
+          homeDir: options.kimiHomeDir,
+        }),
       ],
       cacheTtlMs: 0,
     });
@@ -690,6 +713,39 @@ describe("real provider usage fetchers", () => {
           usedPct: 26,
           remainingPct: 74,
           resetsAt: "2026-02-11T17:32:50Z",
+        }),
+      ],
+    });
+  });
+
+  it("fetches Kimi usage from the CLI credential home", async () => {
+    writeKimiCredentials(join(homeDir, ".kimi-code"), "kimi_cli_token");
+    let requestedUrl: string | null = null;
+    let authorization: string | null = null;
+    fetchApi = (async (url: RequestInfo | URL, init?: RequestInit) => {
+      requestedUrl = url.toString();
+      authorization = (init?.headers as Record<string, string> | undefined)?.Authorization ?? null;
+      return jsonResponse({
+        usage: {
+          limit: "200",
+          remaining: "150",
+          resetTime: "2026-06-23T05:12:17Z",
+        },
+      });
+    }) as unknown as typeof fetch;
+
+    const kimi = findProvider(await service({ kimiHomeDir: homeDir }).listUsage(), "kimi");
+
+    expect(requestedUrl).toBe("https://api.kimi.com/coding/v1/usages");
+    expect(authorization).toBe("Bearer kimi_cli_token");
+    expect(kimi).toMatchObject({
+      status: "available",
+      windows: [
+        expect.objectContaining({
+          id: "coding_usage",
+          usedPct: 25,
+          remainingPct: 75,
+          resetsAt: "2026-06-23T05:12:17Z",
         }),
       ],
     });

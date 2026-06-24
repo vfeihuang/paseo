@@ -636,14 +636,14 @@ export interface AgentSession {
   } | null;
 }
 
-export interface ListModelsOptions {
+export interface FetchCatalogOptions {
   cwd: string;
   force: boolean;
 }
 
-export interface ListModesOptions {
-  cwd: string;
-  force: boolean;
+export interface ProviderCatalog {
+  models: AgentModelDefinition[];
+  modes: AgentMode[];
 }
 
 export interface AgentClient {
@@ -659,8 +659,13 @@ export interface AgentClient {
     overrides?: Partial<AgentSessionConfig>,
     launchContext?: AgentLaunchContext,
   ): Promise<AgentSession>;
-  listModels(options: ListModelsOptions): Promise<AgentModelDefinition[]>;
-  listModes?(options: ListModesOptions): Promise<AgentMode[]>;
+  /**
+   * Discover models and modes together. Implementations may use one upstream
+   * process, separate upstream calls, static modes, or private helpers; callers
+   * outside the provider do not get separate runtime model/mode probes.
+   * The registry is responsible for merging configured model overrides.
+   */
+  fetchCatalog(options: FetchCatalogOptions): Promise<ProviderCatalog>;
   resolveCreateConfig?(input: ResolveAgentCreateConfigInput): ResolveAgentCreateConfigResult;
   isCreateConfigUnattended?(input: AgentCreateConfigUnattendedInput): boolean;
   listCommands?(config: AgentSessionConfig): Promise<AgentSlashCommand[]>;
@@ -683,6 +688,11 @@ export interface AgentClient {
    * Called when Paseo archives an agent so the provider's own UI reflects the same state.
    */
   archiveNativeSession?(handle: AgentPersistenceHandle): Promise<void>;
+  /**
+   * Unarchive a persisted session in the native provider.
+   * Called before Paseo clears its archived flag so provider resume can succeed.
+   */
+  unarchiveNativeSession?(handle: AgentPersistenceHandle): Promise<void>;
   /**
    * Release any provider-owned resources held by this client (background
    * processes, sockets, cached subprocesses, etc.). Called when the daemon
