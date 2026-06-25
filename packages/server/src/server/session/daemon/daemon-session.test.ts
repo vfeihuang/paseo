@@ -1,4 +1,4 @@
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
@@ -33,16 +33,20 @@ function makeSubsystem(overrides: {
 }) {
   const emitted: SessionOutboundMessage[] = [];
   const host: DaemonSessionHost = { emit: (msg) => emitted.push(msg) };
+  const paseoHome = makeHome();
   const subsystem = new DaemonSession({
     host,
-    paseoHome: makeHome(),
+    paseoHome,
     serverId: overrides.serverId,
     daemonVersion: overrides.daemonVersion,
     daemonRuntimeConfig: overrides.daemonRuntimeConfig,
+    listAgents: () => [],
+    listProjects: async () => [],
+    listWorkspaces: async () => [],
     listProviderAvailability: overrides.listProviderAvailability ?? (async () => []),
     logger: pino({ level: "silent" }),
   });
-  return { subsystem, emitted };
+  return { subsystem, emitted, paseoHome };
 }
 
 describe("DaemonSession", () => {
@@ -167,5 +171,41 @@ describe("DaemonSession", () => {
     expect(message.payload.relayEnabled).toBe(true);
     expect(message.payload.url.startsWith("https://app.example.test")).toBe(true);
     expect(typeof message.payload.qr).toBe("string");
+  });
+
+  test("diagnostics includes a log tail and redacts connection secrets", async () => {
+    const { subsystem, emitted, paseoHome } = makeSubsystem({
+      serverId: "srv-1",
+      daemonVersion: "1.2.3",
+      daemonRuntimeConfig: {
+        listen: "127.0.0.1:6767",
+        relay: {
+          enabled: true,
+          endpoint: "relay.secret.test:443",
+          publicEndpoint: "relay.secret.test:443",
+          useTls: true,
+          publicUseTls: true,
+        },
+      },
+    });
+    writeFileSync(
+      join(paseoHome, "daemon.log"),
+      "first line\nrelay.secret.test:443 token=super-secret paseo://pairing-secret\n",
+    );
+
+    await subsystem.handleDiagnosticsRequest({ type: "diagnostics.request", requestId: "d-1" });
+
+    expect(emitted).toHaveLength(1);
+    const message = emitted[0];
+    expect(message.type).toBe("diagnostics.response");
+    if (message.type !== "diagnostics.response") {
+      throw new Error("expected diagnostics response");
+    }
+    expect(message.payload.requestId).toBe("d-1");
+    expect(message.payload.diagnostic).toContain("Daemon log tail");
+    expect(message.payload.diagnostic).toContain("first line");
+    expect(message.payload.diagnostic).not.toContain("relay.secret.test:443");
+    expect(message.payload.diagnostic).not.toContain("super-secret");
+    expect(message.payload.diagnostic).not.toContain("pairing-secret");
   });
 });
