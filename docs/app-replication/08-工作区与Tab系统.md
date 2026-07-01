@@ -239,12 +239,14 @@ function workspaceDeckRetention({ layout, isFocused }) → void
 - **文件**: `src/screens/workspace/workspace-scripts-button.tsx`
 - 在工作区 header 中显示 scripts 快捷按钮
 - 使用 `Tooltip` 包裹，可配置 `hideLabels` 和 `presentation`("ghost"/"button")
-- 点击运行脚本，脚本完成后提示 "Script finished"
+- 交互: `onPress` → 执行脚本 RPC → 脚本完成后显示 toast "Script finished"
+- 由 `WorkspaceScreen` 根据工作区 header 状态决定是否渲染
 
 ### WorkspaceOpenInEditorButton
 - **文件**: `src/screens/workspace/workspace-open-in-editor-button.tsx`
 - 在 explorer 工具栏中显示，打开当前文件到外部编辑器
-- 调用 `usePreferredEditor` 获取偏好编辑器配置
+- 交互: `onPress` → `usePreferredEditor` 获取偏好编辑器 → `openInEditor(filePath)` → 打开外部编辑器
+- disabled 条件: 无偏好编辑器配置时
 
 ## 8.17 Workspace Desktop 面板
 
@@ -283,6 +285,15 @@ function workspaceDeckRetention({ layout, isFocused }) → void
 - 内容: 与桌面端相同 + 可折叠 section（`SidebarCollapsedSectionsStore`）
 - 硬件返回键关闭
 
+**点击交互**:
+- **Agent 行**: `onPress(agent)` → `navigateToAgent({ serverId, agentId, currentPathname, pin })` → 导航到对应 Agent 详情
+- **工作区行**: `onPress(workspace)` → `navigateToWorkspace(serverId, workspaceId)` → 切换到该工作区
+- **底部导航图标**:
+  - 搜索图标 → 打开 `CommandCenter`（快捷键 `toggle-command-center`）
+  - 设置图标 → `router.navigate(buildSettingsSectionRoute("general"))` → 跳转到设置
+- **Ellipsis 菜单（工作区行 trailing）**: `DropdownMenu` → Rename / Close / Archive
+- **DiffStat 徽章（工作区行）**: 显示 `workspace.descriptor.diffStat` 变化文件数
+
 **Callout 系统**:
 - `useSidebarCalloutContext` 提供 `showCallout` / `dismissCallout`
 - 提示类型: WorktreeSetup, Rosetta, Update
@@ -301,7 +312,11 @@ function workspaceDeckRetention({ layout, isFocused }) → void
 
 **交互**:
 - 快捷键 `Ctrl+Shift+B` 切换，`Ctrl+Shift+0` 聚焦
-- 点击文件 → `handleOpenFileFromExplorer` → 创建/跳转 file tab
+- 切换按钮（`SourceControlPanelIcon` + DiffStat 徽章）:
+  - 点击 → `togglePanel("file-explorer")` → 切换显隐
+- 面板切换（File explorer / Git diff / Pull request）:
+  - 通过 tab 按钮或 SegmentedControl 切换面板类型
+- **点击文件**: `handleOpenFileFromExplorer` → 创建/跳转 file tab（可传 lineStart/lineEnd）
 - 移动端: 通过 `CompactExplorerSidebarHost` 管理，硬件返回键关闭
 - 状态: `usePanelStore` 中的 `selectIsFileExplorerOpen`
 
