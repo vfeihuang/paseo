@@ -49,7 +49,7 @@ useHasHydratedWorkspaces(serverId) → boolean
 
 ### PanelStore
 
-**文件**: `src/stores/panel-store.ts`
+**文件**: `src/stores/panel-store/`（目录，含 `index.ts`）
 
 **状态**:
 ```typescript
@@ -209,7 +209,7 @@ interface LastWorkspaceSelection {
 **文件**:
 - `src/stores/sidebar-order-store.ts` — 侧边栏顺序
 - `src/stores/sidebar-view-store.ts` — 侧边栏视图设置
-- `src/stores/sidebar-collapsed-sections-store.ts` — 折叠区域
+- `src/stores/sidebar-collapsed-sections-store/`（目录）— 折叠区域
 
 ### KeyboardShortcutsStore
 

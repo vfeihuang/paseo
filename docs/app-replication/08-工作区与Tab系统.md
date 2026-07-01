@@ -169,7 +169,7 @@ interface BranchSwitcherProps {
 
 **UI**:
 - 圆角 badge trigger: `GitBranch` 图标(14px) + 分支名 + `ChevronDown` 图标
-- hover 时背景变 surface2
+- hover 时背景变 `surface2（#272A29）`
 - 弹出 Combobox: 分支列表，每项 GitBranch 图标 + 分支名
 - 调用 `useBranchSwitcher` hook 管理分支列表加载、创建和切换
 
@@ -273,7 +273,7 @@ function workspaceDeckRetention({ layout, isFocused }) → void
 **渲染**: 在 `AppWithSidebar` 中渲染，覆盖所有页面
 
 **桌面端**:
-- 固定宽度面板（surfaceSidebar 背景色）
+- 固定宽度面板（`surfaceSidebar（#141716）` 背景色）
 - 显示: Agent 列表 + 工作区列表 + 底部导航图标
 - 通过侧边栏呼出 slot（`SidebarCalloutContext`）展示通知/提示
 - 快捷键 `Ctrl+B` 切换显隐，`Ctrl+0` 聚焦
